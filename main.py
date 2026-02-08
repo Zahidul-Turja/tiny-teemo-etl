@@ -1,6 +1,12 @@
-from fastapi import FastAPI, status
+from fastapi import FastAPI, Request, status
+from fastapi.exception_handlers import (
+    http_exception_handler,
+    request_validation_exception_handler,
+)
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.v1 import api
 
@@ -25,6 +31,23 @@ app.include_router(api.router, prefix="/v1")
 @app.get("/health", status_code=status.HTTP_200_OK)
 def health_check():
     return {"message": "Server healthy"}
+
+
+@app.exception_handler(StarletteHTTPException)
+async def general_http_exception_handler(
+    request: Request, exception: StarletteHTTPException
+):
+    return await http_exception_handler(request, exception)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(
+    request: Request, exception: RequestValidationError
+):
+    return await request_validation_exception_handler(
+        request,
+        exception,
+    )
 
 
 # import asyncio
