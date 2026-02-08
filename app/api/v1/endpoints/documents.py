@@ -1,7 +1,9 @@
 import os
 import uuid
 from datetime import datetime
+from typing import Any
 
+import pandas as pd
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from fastapi.responses import JSONResponse
 
@@ -57,6 +59,9 @@ async def upload_file(file: UploadFile = File(...)):
             {
                 "success": True,
                 "message": "File uploaded successfully",
+                "data": {
+                    "file_id": file_name,
+                },
             },
             status_code=status.HTTP_400_BAD_REQUEST,
         )
@@ -68,3 +73,46 @@ async def upload_file(file: UploadFile = File(...)):
         )
     finally:
         await file.close()
+
+
+# 20260208_222901_66fa45bc_housing.csv
+
+
+@router.get("/read_file/{file_id}")
+async def read_uploaded_file(
+    file_id: str,
+) -> dict:
+    try:
+        name, ext = os.path.splitext(file_id)
+        if ext[0:] not in ALLOWED_EXTENSIONS:
+            raise HTTPException(
+                detail="Invalid file id",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+    except Exception as e:
+        raise HTTPException(
+            detail="Invalid file id",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        if ext == ".csv":
+            df = pd.read_csv(os.path.join(UPLOAD_DIR, file_id))
+        elif ext == ".xls":
+            df = pd.read_excel(os.path.join(UPLOAD_DIR, file_id))
+
+        missing_value_count = {}
+        for key, val in df.isna().sum().items():
+            if val > 0:
+                missing_value_count[key] = val
+
+        return {
+            "table_name": name.split("_")[-1],
+            "columns": list(df.columns),
+            "missing_value_count": missing_value_count,
+        }
+    except Exception as e:
+        raise HTTPException(
+            detail=f"Error: {str(e)}",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
