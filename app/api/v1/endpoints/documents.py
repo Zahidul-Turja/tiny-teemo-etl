@@ -27,7 +27,7 @@ def generate_unique_file(original_file_name: str) -> str:
 
 
 @router.post("/upload_file", name="upload file")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(file: UploadFile = File(...)) -> dict:
     """
     Upload CSV with progress tracking
     Returns an upload_id that can be used to track progress
@@ -37,16 +37,34 @@ async def upload_file(file: UploadFile = File(...)):
         return JSONResponse(
             {
                 "success": False,
-                "message": "Not allowed",
+                "message": "Invalid file type",
             },
             status_code=status.HTTP_406_NOT_ACCEPTABLE,
         )
 
     file_name = generate_unique_file(file.filename)
+    name, ext = os.path.splitext(file.filename)
 
     try:
         file_path = os.path.join(UPLOAD_DIR, file_name)
 
+        if ext == ".csv":
+            df = pd.read_csv(file.file)
+        elif ext == ".xls":
+            df = pd.read_excel(file.file)
+
+        # Summary of the file
+        columns = []
+        for col, dtype in df.dtypes.items():
+            data = {
+                "title": col,
+                "dtype": str(dtype),
+                "missing_value_count": int(df[col].isnull().sum()),
+                "unique_value_count": int(df[col].nunique()),
+            }
+            columns.append(data)
+
+        # Write to disk
         with open(file_path, "wb") as buffer:
             while True:
                 chunk = await file.read(CHUNK_SIZE)
@@ -61,9 +79,11 @@ async def upload_file(file: UploadFile = File(...)):
                 "message": "File uploaded successfully",
                 "data": {
                     "file_id": file_name,
+                    "table_name": file_name.split("_")[-1],
+                    "columns": list(columns),
                 },
             },
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_200_OK,
         )
     except Exception as e:
         if os.path.exists(file_path):
