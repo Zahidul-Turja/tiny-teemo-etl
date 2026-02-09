@@ -1,7 +1,6 @@
 import os
 import uuid
 from datetime import datetime
-from typing import Any
 
 import pandas as pd
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
@@ -19,7 +18,12 @@ ALLOWED_EXTENSIONS = (".csv", ".xls")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
-def generate_unique_file(original_file_name: str) -> str:
+def generate_unique_file_name(original_file_name: str) -> str:
+    """
+    Given a file name
+    Returns an unique file name
+    """
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     unique_id = str(uuid.uuid4())[:8]
     name, ext = os.path.splitext(original_file_name)
@@ -29,8 +33,8 @@ def generate_unique_file(original_file_name: str) -> str:
 @router.post("/upload_file", name="upload file")
 async def upload_file(file: UploadFile = File(...)) -> dict:
     """
-    Upload CSV with progress tracking
-    Returns an upload_id that can be used to track progress
+    Need to implement:
+        1. Progress bar for larger files
     """
 
     if not file.filename.endswith(ALLOWED_EXTENSIONS):
@@ -42,8 +46,8 @@ async def upload_file(file: UploadFile = File(...)) -> dict:
             status_code=status.HTTP_406_NOT_ACCEPTABLE,
         )
 
-    file_name = generate_unique_file(file.filename)
-    name, ext = os.path.splitext(file.filename)
+    file_name = generate_unique_file_name(file.filename)
+    _, ext = os.path.splitext(file.filename)
 
     try:
         file_path = os.path.join(UPLOAD_DIR, file_name)
@@ -80,7 +84,9 @@ async def upload_file(file: UploadFile = File(...)) -> dict:
                 "data": {
                     "file_id": file_name,
                     "table_name": file_name.split("_")[-1],
+                    "number_of_rows": df.shape[0],
                     "columns": list(columns),
+                    "preview": df.head(5).to_dict(orient="records"),
                 },
             },
             status_code=status.HTTP_200_OK,
