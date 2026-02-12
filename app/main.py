@@ -6,7 +6,7 @@ from fastapi.exception_handlers import (
 )
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 app = FastAPI(
@@ -29,7 +29,14 @@ app.include_router(router.router, prefix="/v1")
 
 @app.get("/health", status_code=status.HTTP_200_OK)
 def health_check():
-    return {"message": "Server healthy"}
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={
+            "success": True,
+            "message": "Teemo is still tiny",
+            "version": "1.0.0",
+        },
+    )
 
 
 @app.exception_handler(StarletteHTTPException)
