@@ -1,3 +1,4 @@
+from api.v1 import router
 from fastapi import FastAPI, Request, status
 from fastapi.exception_handlers import (
     http_exception_handler,
@@ -7,8 +8,6 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
-
-from app.api.v1 import api
 
 app = FastAPI(
     title="TinyTeemo - ETL",
@@ -25,7 +24,7 @@ app.add_middleware(
 )
 
 
-app.include_router(api.router, prefix="/v1")
+app.include_router(router.router, prefix="/v1")
 
 
 @app.get("/health", status_code=status.HTTP_200_OK)

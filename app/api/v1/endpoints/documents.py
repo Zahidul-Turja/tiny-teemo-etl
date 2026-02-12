@@ -3,10 +3,9 @@ import uuid
 from datetime import datetime
 
 import pandas as pd
+from core.config import settings
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from fastapi.responses import JSONResponse
-
-from config import settings
 
 router = APIRouter()
 
@@ -47,7 +46,7 @@ async def upload_file(file: UploadFile = File(...)) -> dict:
         )
 
     file_name = generate_unique_file_name(file.filename)
-    _, ext = os.path.splitext(file.filename)
+    name, ext = os.path.splitext(file.filename)
 
     try:
         file_path = os.path.join(UPLOAD_DIR, file_name)
@@ -83,7 +82,7 @@ async def upload_file(file: UploadFile = File(...)) -> dict:
                 "message": "File uploaded successfully",
                 "data": {
                     "file_id": file_name,
-                    "table_name": file_name.split("_")[-1],
+                    "table_name": name,
                     "number_of_rows": df.shape[0],
                     "columns": list(columns),
                     "preview": df.head(5).to_dict(orient="records"),
@@ -102,6 +101,7 @@ async def upload_file(file: UploadFile = File(...)) -> dict:
 
 
 # 20260208_222901_66fa45bc_housing.csv
+# 20260212_191352_9e74ab56_Chocolate Sales (2).csv
 
 
 @router.get("/read_file/{file_id}")

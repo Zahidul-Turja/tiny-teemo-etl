@@ -1,6 +1,5 @@
+from api.v1.endpoints import documents, utilities
 from fastapi import APIRouter
-
-from app.api.v1.endpoints import documents, utilities
 
 router = APIRouter()
 
