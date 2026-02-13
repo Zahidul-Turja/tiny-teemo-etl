@@ -90,7 +90,7 @@ class FileProcessor:
             "column_count": len(df.columns),
             "columns": columns_info,
             "preview": preview,
-            "has_missing_values": df.isnull().any().any(),
+            "has_missing_values": bool(df.isnull().any().any()),
             "total_missing_values": int(df.isnull().sum().sum()),
         }
 

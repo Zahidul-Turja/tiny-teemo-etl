@@ -87,118 +87,29 @@ async def upload_file(file: UploadFile = File(...)) -> JSONResponse:
         await file.close()
 
 
-# @router.post("/upload_file", name="upload file")
-# async def upload_file(file: UploadFile = File(...)) -> dict:
-#     """
-#     Need to implement:
-#         1. Progress bar for larger files
-#     """
+@router.get("/info/{file_id}")
+async def get_file_info(file_id: str) -> JSONResponse:
 
-#     if not file.filename.endswith(ALLOWED_EXTENSIONS):
-#         return JSONResponse(
-#             {
-#                 "success": False,
-#                 "message": "Invalid file type",
-#             },
-#             status_code=status.HTTP_406_NOT_ACCEPTABLE,
-#         )
-
-#     file_name = generate_unique_filename(file.filename)
-#     name, ext = os.path.splitext(file.filename)
-
-#     try:
-#         file_path = os.path.join(UPLOAD_DIR, file_name)
-
-#         if ext == ".csv":
-#             df = pd.read_csv(file.file)
-#         elif ext == ".xls":
-#             df = pd.read_excel(file.file)
-
-#         # Summary of the file
-#         columns = []
-#         for col, dtype in df.dtypes.items():
-#             data = {
-#                 "title": col,
-#                 "dtype": str(dtype),
-#                 "missing_value_count": int(df[col].isnull().sum()),
-#                 "unique_value_count": int(df[col].nunique()),
-#             }
-#             columns.append(data)
-
-#         # Write to disk
-#         with open(file_path, "wb") as buffer:
-#             while True:
-#                 chunk = await file.read(CHUNK_SIZE)
-#                 if not chunk:
-#                     break
-
-#                 buffer.write(chunk)
-
-#         return JSONResponse(
-#             {
-#                 "success": True,
-#                 "message": "File uploaded successfully",
-#                 "data": {
-#                     "file_id": file_name,
-#                     "table_name": name,
-#                     "number_of_rows": df.shape[0],
-#                     "columns": list(columns),
-#                     "preview": df.head(5).to_dict(orient="records"),
-#                 },
-#             },
-#             status_code=status.HTTP_200_OK,
-#         )
-#     except Exception as e:
-#         if os.path.exists(file_path):
-#             os.remove(file_path)
-
-#         raise HTTPException(
-#             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-#             detail=f"Error processing file: {str(e)}",
-#         )
-#     finally:
-#         await file.close()
-
-
-# 20260208_222901_66fa45bc_housing.csv
-# 20260212_191352_9e74ab56_Chocolate Sales (2).csv
-
-
-@router.get("/read_file/{file_id}")
-async def read_uploaded_file(
-    file_id: str,
-) -> dict:
-    try:
-        name, ext = os.path.splitext(file_id)
-        if ext[0:] not in ALLOWED_EXTENSIONS:
-            raise HTTPException(
-                detail="Invalid file id",
-                status_code=status.HTTP_400_BAD_REQUEST,
-            )
-    except Exception as e:
+    file_path = os.path.join(settings.UPLOAD_DIR, file_id)
+    if not os.path.exists(file_path):
         raise HTTPException(
-            detail="Invalid file id",
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found",
         )
 
     try:
-        if ext == ".csv":
-            df = pd.read_csv(os.path.join(UPLOAD_DIR, file_id))
-        elif ext == ".xls":
-            df = pd.read_excel(os.path.join(UPLOAD_DIR, file_id))
+        processor = FileProcessor(file_path=file_path)
+        metadata = processor.get_file_metadata()
 
-        missing_value_count = {}
-        for key, val in df.isna().sum().items():
-            if val > 0:
-                missing_value_count[key] = val
-
-        return {
-            "table_name": name.split("_")[-1],
-            "columns": list(df.columns),
-            "missing_value_count": missing_value_count,
-        }
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "success": True,
+                "data": metadata,
+            },
+        )
     except Exception as e:
         raise HTTPException(
-            detail=f"Error: {str(e)}",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error reading file: {str(e)}",
         )
