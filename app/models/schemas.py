@@ -1,6 +1,8 @@
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.core.constants import DatabaseType
 
 
 # -------- File Uploads ---------
@@ -37,3 +39,35 @@ class DataTypeInfo(BaseModel):
 
 class AvailableDataTypesResponse(BaseModel):
     data_types: List[DataTypeInfo]
+
+
+# ================= Database Connections =======================
+class DatabaseConnection(BaseModel):
+    db_type: DatabaseType
+    host: str = "localhost"
+    port: Optional[int] = None
+    database: str
+    username: str
+    password: str
+
+    @field_validator("port")
+    def set_default_port(cls, val: str, info: Dict[str, Any]):
+        if val is None:
+            db_type = info.data.get("db_type")
+            default_ports = {
+                DatabaseType.POSTGRESQL: 5432,
+                DatabaseType.MSSQL: 3306,
+                DatabaseType.MSSQL: 1433,
+            }
+            return default_ports.get(db_type)
+        return val
+
+
+class TestConnectionRequest(BaseModel):
+    connection: DatabaseConnection
+
+
+class TestConnectionResponse(BaseModel):
+    success: bool
+    message: str
+    data: Optional[Dict[str, Any]] = None
