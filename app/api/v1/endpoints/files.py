@@ -87,6 +87,49 @@ async def upload_file(file: UploadFile = File(...)) -> JSONResponse:
         await file.close()
 
 
+@router.get("/list")
+async def list_files() -> JSONResponse:
+
+    # ? Need pagination late
+
+    try:
+        files = []
+
+        for filename in os.listdir(settings.UPLOAD_DIR):
+            name, file_ext = os.path.splitext(filename)
+            if file_ext.lower() in ALLOWED_EXTENSIONS:
+                file_path = os.path.join(settings.UPLOAD_DIR, filename)
+                file_stat = os.stat(file_path)
+
+                creation_timestamp = file_stat.st_birthtime
+                creation_date = datetime.fromtimestamp(creation_timestamp)
+
+                files.append(
+                    {
+                        "file_id": filename,
+                        "filename": name,
+                        "size": file_stat.st_size,
+                        "uploaded_at": creation_date.strftime("%Y-%m-%d %H:%M:%S"),
+                    }
+                )
+
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "success": True,
+                "data": {
+                    "files": files,
+                    "total": len(files),
+                },
+            },
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error listing files: {str(e)}",
+        )
+
+
 @router.get("/info/{file_id}")
 async def get_file_info(file_id: str) -> JSONResponse:
 
@@ -112,4 +155,31 @@ async def get_file_info(file_id: str) -> JSONResponse:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error reading file: {str(e)}",
+        )
+
+
+@router.delete("/{file_id}")
+async def delete_file(file_id: str) -> JSONResponse:
+    file_path = os.path.join(settings.UPLOAD_DIR, file_id)
+
+    if not os.path.exists(file_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found",
+        )
+
+    try:
+        os.remove(file_path)
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "success": True,
+                "message": "File deleted successfully",
+            },
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error deleting file: {str(e)}",
         )
