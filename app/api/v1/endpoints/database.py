@@ -40,3 +40,36 @@ async def test_database_connection(request: TestConnectionRequest) -> JSONRespon
                 "message": f"Connection test failed: {str(e)}",
             },
         )
+
+
+@router.get("/databases")
+def get_supported_databases() -> JSONResponse:
+    databases = [
+        {
+            "type": DatabaseType.POSTGRESQL.value,
+            "name": "PostgreSQL",
+            "default_port": 5432,
+            "supports_schema": True,
+        },
+        {
+            "type": DatabaseType.MSSQL.value,
+            "name": "MySQL",
+            "default_port": 3302,
+            "supports_schema": False,
+        },
+        {
+            "type": DatabaseType.SQLITE.value,
+            "name": "SQLite",
+            "default_port": None,
+            "supports_schema": False,
+            "note": "File-based database, no host/port required",
+        },
+    ]
+
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={
+            "success": True,
+            "data": databases,
+        },
+    )
