@@ -1,9 +1,18 @@
-from fastapi import APIRouter, status
+import os
+
+from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import JSONResponse
 
+from app.core.config import settings
 from app.core.constants import DatabaseType
 from app.database.connectors.sqlite import SQLiteConnector
-from app.models.schemas import TestConnectionRequest, TestConnectionResponse
+from app.models.schemas import (
+    TestConnectionRequest,
+    TestConnectionResponse,
+    UploadToDBRequest,
+    UploadToDBResponse,
+)
+from app.services.file_processor import FileProcessor
 
 router = APIRouter()
 
@@ -73,3 +82,52 @@ def get_supported_databases() -> JSONResponse:
             "data": databases,
         },
     )
+
+
+@router.post("/upload", response_model=UploadToDBResponse)
+async def upload_to_database(request: UploadToDBRequest) -> JSONResponse:
+    file_path = os.path.join(
+        settings.UPLOAD_DIR,
+        request.field_id,
+    )
+
+    if not os.path.exists(file_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found",
+        )
+    try:
+        processor = FileProcessor(file_path=file_path)
+        df = processor.df
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error uploading to database: {str(e)}",
+        )
+
+
+@router.post("/list-tables")
+async def list_tables(request: TestConnectionRequest) -> JSONResponse:
+
+    try:
+        connector = get_database_connector(request.connection)
+
+        # ? Need to implement the listing tables
+        tables = []
+
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "success": True,
+                "data": {
+                    "tables": tables,
+                },
+            },
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error listing tables: {str(e)}",
+        )
