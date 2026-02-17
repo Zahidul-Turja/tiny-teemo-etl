@@ -13,6 +13,7 @@ from app.models.schemas import (
     UploadToDBResponse,
 )
 from app.services.file_processor import FileProcessor
+from app.services.schema_mapper import SchemaMapper
 
 router = APIRouter()
 
@@ -99,6 +100,51 @@ async def upload_to_database(request: UploadToDBRequest) -> JSONResponse:
     try:
         processor = FileProcessor(file_path=file_path)
         df = processor.df
+
+        # Apply schema transformations
+        mapper = SchemaMapper(df)
+        transformed_df = SchemaMapper.apply_column_mapping(request.column_mappings)
+
+        if mapper.transformation_errors:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={
+                    "success": False,
+                    "message": "Schema transformation failed",
+                    "data": {
+                        "errors": mapper.transformation_errors,
+                    },
+                },
+            )
+
+        connector = get_database_connector(request.connection)
+
+        result = connector.upload_dataframe(
+            df=transformed_df,
+            table_name=request.table_name,
+            column_mapping=request.column_mappings,
+            if_exists=request.if_exists,
+            batch_size=request.batch_size,
+        )
+
+        if request.create_index and request.index_columns:
+            pass
+            # with connector:
+            #     connector.create_index(
+            #         table_name=request.table_name,
+            #         columns=request.index_columns,
+            #     )
+
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "success": True,
+                "message": result["message"],
+                "data": {
+                    "table_name": result["table_name"],
+                },
+            },
+        )
 
     except Exception as e:
         raise HTTPException(
