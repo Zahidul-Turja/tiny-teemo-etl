@@ -1,9 +1,11 @@
 import sqlite3
 from typing import Any, Dict, List
 
+import pandas as pd
+
+from app.core.constants import DataType
 from app.database.connectors.base import BaseDatabaseConnector
 from app.models.schemas import ColumnMapping
-from app.core.constants import DataType
 
 
 class SQLiteConnector(BaseDatabaseConnector):
@@ -64,6 +66,52 @@ class SQLiteConnector(BaseDatabaseConnector):
         cursor.execute(query)
         self._conn.commit()
 
+    def drop_table(self, table_name: str) -> None:
+        query = f"DROP TABLE IF EXISTS {table_name}"
+
+        cursor = self._conn.cursor()
+        cursor.execute(query)
+        self._conn.commit()
+
+    def insert_data(
+        self,
+        table_name: str,
+        df: pd.DataFrame,
+        batch_size=1000,
+    ) -> Dict[str, Any]:
+        columns = df.columns.to_list()
+
+        # ? the double quotation "?" might cause issue
+        placeholders = ", ".join(["?"] * len(columns))
+        column_names = ", ".join(columns)
+        query = f"INSERT INTO {table_name} ({column_names}) VALUE ({placeholders})"
+
+        data = [tuple(None if pd.isna(x) else x for x in row) for row in df.values]
+
+        rows_inserted = 0
+        rows_failed = 0
+
+        try:
+            cursor = self._conn.cursor()
+
+            for i in range(0, len(data), batch_size):
+                batch = data[i : i + batch_size]
+                cursor.executemany(query, batch)
+                rows_inserted += len(batch)
+
+            self._conn.commit()
+
+        except Exception as e:
+            # ? Need proper logs for invalid rows
+            self._conn.rollback()
+            rows_failed = len(data)
+            raise Exception(f"Failed to insert data: {str(e)}")
+
+        return {
+            "rows_inserted": rows_inserted,
+            "rows_failed": rows_failed,
+        }
+
     def _map_datatype_to_sql(self, dtype: DataType) -> str:
         type_map = {
             DataType.INTEGER: "INTEGER",
@@ -119,5 +167,7 @@ class SQLiteConnector(BaseDatabaseConnector):
         if primary_keys:
             columns.append(f"PRIMARY KEY ({', '.join(primary_keys)})")
 
+        query = f"CREATE TABLE {table_name} (\n " + ",\n ".join(columns) + "\n)"
+        return query
         query = f"CREATE TABLE {table_name} (\n " + ",\n ".join(columns) + "\n)"
         return query
