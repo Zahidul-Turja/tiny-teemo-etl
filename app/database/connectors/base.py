@@ -1,9 +1,9 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
-
-from app.models.schemas import DatabaseConnection, ColumnMapping
 import pandas as pd
+
+from app.models.schemas import ColumnMapping, DatabaseConnection
 
 
 class BaseDatabaseConnector(ABC):
@@ -26,12 +26,22 @@ class BaseDatabaseConnector(ABC):
         pass
 
     @abstractmethod
+    def summarize(self) -> Dict[str, Any]:
+        """
+        Provides detail information about the entire database
+
+        Returns:
+            Dict[str, Any]: list_of_tables with column_details, columns details have columns name, missing values etc.
+        """
+        pass
+
+    @abstractmethod
     def table_exists(self, table_name: str) -> bool:
         pass
 
     @abstractmethod
     def create_table(
-        self, table_name: str, column_mapping: List[ColumnMapping]
+        self, table_name: str, column_mappings: List[ColumnMapping]
     ) -> None:
         pass
 
@@ -49,7 +59,7 @@ class BaseDatabaseConnector(ABC):
         self,
         df: pd.DataFrame,
         table_name: str,
-        column_mapping: List[ColumnMapping],
+        column_mappings: List[ColumnMapping],
         if_exists: str = "fail",
         batch_size: int = 1000,
     ) -> Dict[str, Any]:
@@ -71,14 +81,20 @@ class BaseDatabaseConnector(ABC):
 
             exists = self.table_exists(table_name)
 
-            if exists and if_exists == "fail":
-                raise ValueError(f"Table '{table_name}' already exists")
+            if exists:
+                if if_exists == "fail":
+                    raise ValueError(f"Table '{table_name}' already exists")
 
-            elif exists and if_exists == "replace":
-                self.drop_table(table_name=table_name)
+                elif if_exists == "replace":
+                    self.drop_table(table_name=table_name)
+                    self.create_table(
+                        table_name=table_name, column_mappings=column_mappings
+                    )
 
-            elif not exists:
-                self.create_table(table_name=table_name, column_mapping=column_mapping)
+            if not exists:
+                self.create_table(
+                    table_name=table_name, column_mappings=column_mappings
+                )
 
             result = self.insert_data(
                 table_name=table_name,
@@ -114,3 +130,12 @@ class BaseDatabaseConnector(ABC):
             return "NULL"
         else:
             return str(value)
+
+    def __enter__(self):
+        """Context manager entry"""
+        self.connect()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manage exit"""
+        self.disconnect()

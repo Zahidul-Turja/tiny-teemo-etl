@@ -91,9 +91,13 @@ class SchemaMapper:
         """Convert column to integer"""
         try:
             if col.dtype == "object":
-                col = col.astype(str).str.replace(",", "").str.replace("$", "")
-
-            return pd.to_numeric(col, errors="coerce").astype("int64")
+                col = (
+                    col.astype(str)
+                    .str.replace(",", "")
+                    .str.replace("$", "")
+                    .str.strip()
+                )
+            return pd.to_numeric(col, errors="coerce").astype("Int64")
         except Exception as e:
             raise ValueError(f"Cannot convert to integer: {str(e)}")
 

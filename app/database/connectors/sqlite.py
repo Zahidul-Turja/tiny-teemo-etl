@@ -34,17 +34,44 @@ class SQLiteConnector(BaseDatabaseConnector):
             cursor.execute("SELECT sqlite_version();")
             version = cursor.fetchone()[0]
 
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;"
+            )
+            list_of_tables = cursor.fetchall()
+
+            previews = []
+            for (table_name,) in list_of_tables:
+                cursor.execute(f"SELECT * FROM {table_name} LIMIT 5;")
+                table_data = cursor.fetchall()
+
+                cursor.execute(f"SELECT name FROM PRAGMA_TABLE_INFO('{table_name}');")
+                columns = cursor.fetchall()
+
+                data = {
+                    "table": table_name,
+                    "columns": columns,
+                    "data": cursor.fetchall(),
+                }
+                previews.append(data)
+
             return {
                 "success": True,
                 "message": "Connection successful",
                 "server_version": f"SQLite {version}",
                 "database": self.connection.database,
+                "list_of_tables": list_of_tables,
+                "previews": previews,
             }
         except Exception as e:
             return {
                 "success": False,
                 "message": f"Connection failed: {str(e)}",
             }
+
+    def summarize(self):
+        self.connect()
+
+        cursor = self._conn.cursor()
 
     def table_exists(self, table_name) -> bool:
         query = """
@@ -57,9 +84,9 @@ class SQLiteConnector(BaseDatabaseConnector):
 
         return result is not None
 
-    def create_table(self, table_name, column_mapping) -> None:
+    def create_table(self, table_name, column_mappings) -> None:
         query = self._build_create_table_query(
-            table_name=table_name, column_mapping=column_mapping
+            table_name=table_name, column_mappings=column_mappings
         )
 
         cursor = self._conn.cursor()
@@ -84,7 +111,7 @@ class SQLiteConnector(BaseDatabaseConnector):
         # ? the double quotation "?" might cause issue
         placeholders = ", ".join(["?"] * len(columns))
         column_names = ", ".join(columns)
-        query = f"INSERT INTO {table_name} ({column_names}) VALUE ({placeholders})"
+        query = f"INSERT INTO {table_name} ({column_names}) VALUES ({placeholders})"
 
         data = [tuple(None if pd.isna(x) else x for x in row) for row in df.values]
 
@@ -111,6 +138,22 @@ class SQLiteConnector(BaseDatabaseConnector):
             "rows_inserted": rows_inserted,
             "rows_failed": rows_failed,
         }
+
+    def create_index(
+        self,
+        table_name: str,
+        columns: List[str],
+        index_name=None,
+    ) -> None:
+        if not index_name:
+            index_name = f"idx_{table_name}_{'_'.join(columns)}"
+
+        column_str = ", ".join(columns)
+        query = f"CREATE INDEX {index_name} ON {table_name} ({column_str})"
+
+        cursor = self._conn.cursor()
+        cursor.execute(query)
+        self._conn.commit()
 
     def _map_datatype_to_sql(self, dtype: DataType) -> str:
         type_map = {
@@ -167,7 +210,5 @@ class SQLiteConnector(BaseDatabaseConnector):
         if primary_keys:
             columns.append(f"PRIMARY KEY ({', '.join(primary_keys)})")
 
-        query = f"CREATE TABLE {table_name} (\n " + ",\n ".join(columns) + "\n)"
-        return query
         query = f"CREATE TABLE {table_name} (\n " + ",\n ".join(columns) + "\n)"
         return query
