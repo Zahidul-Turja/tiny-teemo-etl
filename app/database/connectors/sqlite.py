@@ -17,6 +17,9 @@ class SQLiteConnector(BaseDatabaseConnector):
             self._conn.execute(
                 "PRAGMA foreign_keys = ON"
             )  # Enable the enforcement of foreign key constraints for the current database connection
+            self._conn.row_factory = (
+                sqlite3.Row
+            )  # Provides dictionary like access of the object instead of tuple by index
 
         except sqlite3.Error as e:
             raise ConnectionError(f"Failed to connect to SQLite: {str(e)}")
@@ -34,33 +37,10 @@ class SQLiteConnector(BaseDatabaseConnector):
             cursor.execute("SELECT sqlite_version();")
             version = cursor.fetchone()[0]
 
-            cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;"
-            )
-            list_of_tables = cursor.fetchall()
-
-            previews = []
-            for (table_name,) in list_of_tables:
-                cursor.execute(f"SELECT * FROM {table_name} LIMIT 5;")
-                table_data = cursor.fetchall()
-
-                cursor.execute(f"SELECT name FROM PRAGMA_TABLE_INFO('{table_name}');")
-                columns = cursor.fetchall()
-
-                data = {
-                    "table": table_name,
-                    "columns": columns,
-                    "data": cursor.fetchall(),
-                }
-                previews.append(data)
-
             return {
                 "success": True,
                 "message": "Connection successful",
                 "server_version": f"SQLite {version}",
-                "database": self.connection.database,
-                "list_of_tables": list_of_tables,
-                "previews": previews,
             }
         except Exception as e:
             return {
@@ -68,21 +48,77 @@ class SQLiteConnector(BaseDatabaseConnector):
                 "message": f"Connection failed: {str(e)}",
             }
 
-    def summarize(self):
-        self.connect()
+    def summarize(self, preview_rows: int = 5):
+        try:
+            self.connect()
+            # self._conn.row_factory = sqlite3.Row
+            cursor = self._conn.cursor()
 
-        cursor = self._conn.cursor()
+            cursor.execute(
+                """
+                SELECT name 
+                FROM sqlite_master 
+                WHERE type='table' AND name NOT LIKE 'sqlite_%' 
+                ORDER BY name;   
+                """
+            )
+            list_of_tables = [table[0] for table in cursor.fetchall()]
+
+            previews = []
+            for table_name in list_of_tables:
+                # Head of the table
+                cursor.execute(f"SELECT * FROM '{table_name}' LIMIT {preview_rows};")
+                table_data = [dict(row) for row in cursor.fetchall()]
+
+                # Column META data
+                cursor.execute(f"PRAGMA table_info('{table_name}')")
+                columns = [
+                    {
+                        "name": row[1],
+                        "type": row[2],
+                        "not_null": bool(row[3]),
+                        "default": row[4],
+                        "primary_key": bool(row[5]),
+                    }
+                    for row in cursor.fetchall()
+                ]
+
+                # Number of rows
+                cursor.execute(f"SELECT COUNT(*) FROM '{table_name}';")
+                num_of_rows = cursor.fetchone()[0]
+
+                data = {
+                    "table": table_name,
+                    "row_count": num_of_rows,
+                    "columns": columns,
+                    "data": table_data,
+                }
+                previews.append(data)
+            return {
+                "database": self.connection.database,
+                "list_of_tables": list_of_tables,
+                "previews": previews,
+            }
+        except Exception as e:
+            raise Exception(f"Error summarising: {str(e)}")
+        finally:
+            self.disconnect()
 
     def table_exists(self, table_name) -> bool:
-        query = """
-            SELECT name FROM sqlite_master
-            WHERE type='table' AND name=?
-        """
-        cursor = self._conn.cursor()
-        cursor.execute(query, (table_name,))
-        result = cursor.fetchone()
+        try:
+            query = """
+                SELECT name FROM sqlite_master
+                WHERE type='table' AND name=?
+            """
+            cursor = self._conn.cursor()
+            cursor.execute(query, (table_name,))
+            result = cursor.fetchone()
 
-        return result is not None
+            return result is not None
+        except Exception as e:
+            raise Exception(f"Error checking table existence: {str(e)}")
+        finally:
+            self.disconnect()
 
     def create_table(self, table_name, column_mappings) -> None:
         query = self._build_create_table_query(

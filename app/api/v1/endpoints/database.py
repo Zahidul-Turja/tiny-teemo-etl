@@ -153,22 +153,19 @@ async def upload_to_database(request: UploadToDBRequest) -> JSONResponse:
         )
 
 
-@router.post("/list-tables")
+@router.post("/summary")
 async def list_tables(request: TestConnectionRequest) -> JSONResponse:
 
     try:
         connector = get_database_connector(request.connection)
-
-        # ? Need to implement the listing tables
-        tables = []
+        data = connector.summarize()
 
         return JSONResponse(
             status_code=status.HTTP_200_OK,
             content={
                 "success": True,
-                "data": {
-                    "tables": tables,
-                },
+                "message": "Data fetched successfully",
+                "data": data,
             },
         )
 
