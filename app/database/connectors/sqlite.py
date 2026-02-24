@@ -53,7 +53,6 @@ class SQLiteConnector(BaseDatabaseConnector):
     def summarize(self, preview_rows: int = 5):
         try:
             self.connect()
-            # self._conn.row_factory = sqlite3.Row
             cursor = self._conn.cursor()
 
             cursor.execute(
@@ -102,7 +101,7 @@ class SQLiteConnector(BaseDatabaseConnector):
                 "previews": previews,
             }
         except Exception as e:
-            raise Exception(f"Error summarising: {str(e)}")
+            raise Exception(f"Error summarizing: {str(e)}")
         finally:
             self.disconnect()
 

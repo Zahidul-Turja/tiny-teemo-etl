@@ -26,7 +26,7 @@ class BaseDatabaseConnector(ABC):
         pass
 
     @abstractmethod
-    def summarize(self) -> Dict[str, Any]:
+    def summarize(self, preview_rows: int) -> Dict[str, Any]:
         """
         Provides detail information about the entire database
 
