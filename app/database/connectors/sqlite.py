@@ -47,6 +47,8 @@ class SQLiteConnector(BaseDatabaseConnector):
                 "success": False,
                 "message": f"Connection failed: {str(e)}",
             }
+        finally:
+            self.disconnect()
 
     def summarize(self, preview_rows: int = 5):
         try:

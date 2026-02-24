@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.core.constants import DatabaseType
+from app.database.connectors.postgres import PostgresConnector
 from app.database.connectors.sqlite import SQLiteConnector
 from app.models.schemas import (
     TestConnectionRequest,
@@ -21,6 +22,7 @@ router = APIRouter()
 def get_database_connector(connection):
     connectors = {
         DatabaseType.SQLITE: SQLiteConnector,
+        DatabaseType.POSTGRESQL: PostgresConnector,
     }
     connector_class = connectors.get(connection.db_type)
     if not connector_class:

@@ -1,0 +1,56 @@
+services:
+  postgres_1:
+    image: postgres:16
+    container_name: postgres_1
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: test_db_1
+      POSTGRES_USER: test_user_1
+      POSTGRES_PASSWORD: test_pass_1
+    volumes:
+      - postgres_1_data:/var/lib/postgresql/data
+
+  postgres_2:
+    image: postgres:16
+    container_name: postgres_2
+    ports:
+      - "5434:5432"
+    environment:
+      POSTGRES_DB: test_db_2
+      POSTGRES_USER: test_user_2
+      POSTGRES_PASSWORD: test_pass_2
+    volumes:
+      - postgres_2_data:/var/lib/postgresql/data
+
+  mysql_1:
+    image: mysql:8.4
+    container_name: mysql_1
+    ports:
+      - "3307:3306"
+    environment:
+      MYSQL_DATABASE: test_db_1
+      MYSQL_USER: test_user_1
+      MYSQL_PASSWORD: test_pass_1
+      MYSQL_ROOT_PASSWORD: root_pass_1
+    volumes:
+      - mysql_1_data:/var/lib/mysql
+
+  mysql_2:
+    image: mysql:8.4
+    container_name: mysql_2
+    ports:
+      - "3308:3306"
+    environment:
+      MYSQL_DATABASE: test_db_2
+      MYSQL_USER: test_user_2
+      MYSQL_PASSWORD: test_pass_2
+      MYSQL_ROOT_PASSWORD: root_pass_2
+    volumes:
+      - mysql_2_data:/var/lib/mysql
+
+volumes:
+  postgres_1_data:
+  postgres_2_data:
+  mysql_1_data:
+  mysql_2_data:
