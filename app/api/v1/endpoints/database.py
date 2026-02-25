@@ -54,7 +54,7 @@ async def test_database_connection(request: TestConnectionRequest) -> JSONRespon
         )
 
 
-@router.get("/databases")
+@router.get("/supported-types")
 def get_supported_databases() -> JSONResponse:
     databases = [
         {
@@ -175,4 +175,28 @@ async def list_tables(request: TestConnectionRequest) -> JSONResponse:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error listing tables: {str(e)}",
+        )
+
+
+@router.get("/table-exists/{table_name}")
+async def check_table_exists(
+    request: TestConnectionRequest, table_name: str
+) -> JSONResponse:
+    try:
+        connector = get_database_connector(request.connection)
+        exists = connector.table_exists(table_name)
+
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "message": "Table exists" if exists else "Table does not exists",
+                "data": {
+                    "exists": exists,
+                },
+            },
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error checking for table: {str(e)}",
         )

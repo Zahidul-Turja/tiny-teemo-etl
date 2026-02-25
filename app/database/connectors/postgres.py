@@ -133,8 +133,24 @@ class PostgresConnector(BaseDatabaseConnector):
         finally:
             self.disconnect()
 
-    def create_index(self, table_name, columns, index_name=None):
-        return super().create_index(table_name, columns, index_name)
+    def table_exists(self, table_name: str) -> bool:
+        try:
+            query = """
+            SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = %s
+            )
+            """
+            cursor = self._conn.cursor()
+            cursor.execute(query, (table_name,))
+            result = cursor.fetchone()
+
+            return result is not None
+        except Exception as e:
+            raise Exception(f"Error checking table existence: {str(e)}")
+        finally:
+            self.disconnect()
 
     def create_table(self, table_name, column_mappings):
         return super().create_table(table_name, column_mappings)
@@ -142,8 +158,8 @@ class PostgresConnector(BaseDatabaseConnector):
     def drop_table(self, table_name):
         return super().drop_table(table_name)
 
+    def create_index(self, table_name, columns, index_name=None):
+        return super().create_index(table_name, columns, index_name)
+
     def insert_data(self, table_name, df, batch_size=1000):
         return super().insert_data(table_name, df, batch_size)
-
-    def table_exists(self, table_name):
-        return super().table_exists(table_name)

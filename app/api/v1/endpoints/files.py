@@ -101,7 +101,7 @@ async def list_files() -> JSONResponse:
                 file_path = os.path.join(settings.UPLOAD_DIR, filename)
                 file_stat = os.stat(file_path)
 
-                creation_timestamp = file_stat.st_birthtime
+                creation_timestamp = file_stat.st_ctime
                 creation_date = datetime.fromtimestamp(creation_timestamp)
 
                 files.append(
