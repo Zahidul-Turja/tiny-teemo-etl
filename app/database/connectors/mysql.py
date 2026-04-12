@@ -1,43 +1,45 @@
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
-import psycopg2
-from psycopg2.extras import RealDictCursor, execute_values
 
 from app.core.constants import DataType
 from app.database.connectors.base import BaseDatabaseConnector
 from app.models.schemas import ColumnMapping
 
 
-class PostgresConnector(BaseDatabaseConnector):
+class MySQLConnector(BaseDatabaseConnector):
 
     def connect(self) -> None:
         try:
+            import mysql.connector
+
             c = self.connection
-            self._conn = psycopg2.connect(
+            self._conn = mysql.connector.connect(
                 host=c.host,
-                port=c.port or 5432,
+                port=c.port or 3306,
                 database=c.database,
                 user=c.username,
                 password=c.password,
+                autocommit=False,
             )
-            self._conn.autocommit = False
-        except psycopg2.Error as exc:
-            raise ConnectionError(f"Failed to connect to PostgreSQL: {exc}") from exc
+        except Exception as exc:
+            raise ConnectionError(f"Failed to connect to MySQL: {exc}") from exc
 
     def disconnect(self) -> None:
-        if self._conn and not self._conn.closed:
+        if self._conn and self._conn.is_connected():
             self._conn.close()
             self._conn = None
 
     def test_connection(self) -> Dict[str, Any]:
         try:
             self.connect()
-            version = self._conn.server_version
+            cursor = self._conn.cursor()
+            cursor.execute("SELECT VERSION()")
+            version = cursor.fetchone()[0]
             return {
                 "success": True,
                 "message": "Connection successful",
-                "server_version": f"PostgreSQL {version}",
+                "server_version": f"MySQL {version}",
             }
         except Exception as exc:
             return {"success": False, "message": f"Connection failed: {exc}"}
@@ -47,65 +49,31 @@ class PostgresConnector(BaseDatabaseConnector):
     def summarize(self, preview_rows: int = 5) -> Dict[str, Any]:
         try:
             self.connect()
-            cursor = self._conn.cursor(cursor_factory=RealDictCursor)
+            cursor = self._conn.cursor(dictionary=True)
 
-            cursor.execute(
-                """
-                SELECT table_name
-                FROM information_schema.tables
-                WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
-                  AND table_type = 'BASE TABLE'
-                ORDER BY table_name;
-                """
-            )
-            list_of_tables = [row["table_name"] for row in cursor.fetchall()]
+            cursor.execute("SHOW TABLES")
+            list_of_tables = [list(row.values())[0] for row in cursor.fetchall()]
 
             previews = []
             for table_name in list_of_tables:
                 cursor.execute(
-                    f'SELECT * FROM "{table_name}" LIMIT %s', (preview_rows,)
+                    f"SELECT * FROM `{table_name}` LIMIT %s", (preview_rows,)
                 )
-                table_data = [dict(row) for row in cursor.fetchall()]
+                table_data = cursor.fetchall()
 
-                cursor.execute(
-                    """
-                    SELECT column_name, data_type, is_nullable, column_default
-                    FROM information_schema.columns
-                    WHERE table_schema = 'public' AND table_name = %s
-                    ORDER BY ordinal_position;
-                    """,
-                    (table_name,),
-                )
-                col_rows = cursor.fetchall()
-
-                # Primary key lookup
-                cursor.execute(
-                    """
-                    SELECT kcu.column_name
-                    FROM information_schema.table_constraints tc
-                    JOIN information_schema.key_column_usage kcu
-                      ON tc.constraint_name = kcu.constraint_name
-                     AND tc.table_schema = kcu.table_schema
-                    WHERE tc.constraint_type = 'PRIMARY KEY'
-                      AND tc.table_schema = 'public'
-                      AND tc.table_name = %s;
-                    """,
-                    (table_name,),
-                )
-                pk_cols = {row["column_name"] for row in cursor.fetchall()}
-
+                cursor.execute(f"DESCRIBE `{table_name}`")
                 columns = [
                     {
-                        "name": row["column_name"],
-                        "type": row["data_type"],
-                        "not_null": row["is_nullable"] == "NO",
-                        "default": row["column_default"],
-                        "primary_key": row["column_name"] in pk_cols,
+                        "name": row["Field"],
+                        "type": row["Type"],
+                        "not_null": row["Null"] == "NO",
+                        "default": row["Default"],
+                        "primary_key": row["Key"] == "PRI",
                     }
-                    for row in col_rows
+                    for row in cursor.fetchall()
                 ]
 
-                cursor.execute(f'SELECT COUNT(*) AS cnt FROM "{table_name}"')
+                cursor.execute(f"SELECT COUNT(*) AS cnt FROM `{table_name}`")
                 num_rows = cursor.fetchone()["cnt"]
 
                 previews.append(
@@ -123,23 +91,18 @@ class PostgresConnector(BaseDatabaseConnector):
                 "previews": previews,
             }
         except Exception as exc:
-            raise RuntimeError(f"Error summarizing PostgreSQL: {exc}") from exc
+            raise RuntimeError(f"Error summarizing MySQL: {exc}") from exc
         finally:
             self.disconnect()
 
     def table_exists(self, table_name: str) -> bool:
-        # Same pattern as SQLite: caller owns the connection lifecycle
         cursor = self._conn.cursor()
         cursor.execute(
-            """
-            SELECT EXISTS (
-                SELECT 1 FROM information_schema.tables
-                WHERE table_schema = 'public' AND table_name = %s
-            )
-            """,
+            "SELECT COUNT(*) FROM information_schema.tables "
+            "WHERE table_schema = DATABASE() AND table_name = %s",
             (table_name,),
         )
-        return cursor.fetchone()[0]
+        return cursor.fetchone()[0] > 0
 
     def create_table(
         self, table_name: str, column_mappings: List[ColumnMapping]
@@ -151,7 +114,7 @@ class PostgresConnector(BaseDatabaseConnector):
 
     def drop_table(self, table_name: str) -> None:
         cursor = self._conn.cursor()
-        cursor.execute(f'DROP TABLE IF EXISTS "{table_name}"')
+        cursor.execute(f"DROP TABLE IF EXISTS `{table_name}`")
         self._conn.commit()
 
     def insert_data(
@@ -161,8 +124,9 @@ class PostgresConnector(BaseDatabaseConnector):
         batch_size: int = 10_000,
     ) -> Dict[str, Any]:
         columns = df.columns.tolist()
-        col_names = ", ".join(f'"{c}"' for c in columns)
-        query = f'INSERT INTO "{table_name}" ({col_names}) VALUES %s'
+        placeholders = ", ".join(["%s"] * len(columns))
+        col_names = ", ".join(f"`{c}`" for c in columns)
+        query = f"INSERT INTO `{table_name}` ({col_names}) VALUES ({placeholders})"
 
         rows_inserted = 0
         rows_failed = 0
@@ -175,7 +139,7 @@ class PostgresConnector(BaseDatabaseConnector):
                     tuple(None if pd.isna(v) else v for v in row)
                     for row in batch_df.itertuples(index=False)
                 ]
-                execute_values(cursor, query, rows)
+                cursor.executemany(query, rows)
                 rows_inserted += len(rows)
 
             self._conn.commit()
@@ -194,34 +158,32 @@ class PostgresConnector(BaseDatabaseConnector):
     ) -> None:
         if not index_name:
             index_name = f"idx_{table_name}_{'_'.join(columns)}"
-        col_str = ", ".join(f'"{c}"' for c in columns)
+        col_str = ", ".join(f"`{c}`" for c in columns)
         cursor = self._conn.cursor()
-        cursor.execute(
-            f'CREATE INDEX IF NOT EXISTS "{index_name}" ON "{table_name}" ({col_str})'
-        )
+        cursor.execute(f"CREATE INDEX `{index_name}` ON `{table_name}` ({col_str})")
         self._conn.commit()
-
-    # ── internal ─────────────────────────────────────────────────────────────
 
     def _map_datatype_to_sql(self, dtype: DataType) -> str:
         return {
-            DataType.INTEGER: "INTEGER",
+            DataType.INTEGER: "INT",
             DataType.BIGINT: "BIGINT",
-            DataType.FLOAT: "DOUBLE PRECISION",
-            DataType.DECIMAL: "NUMERIC(18,2)",
+            DataType.FLOAT: "DOUBLE",
+            DataType.DECIMAL: "DECIMAL(18,2)",
             DataType.STRING: "VARCHAR(255)",
             DataType.TEXT: "TEXT",
-            DataType.BOOLEAN: "BOOLEAN",
+            DataType.BOOLEAN: "TINYINT(1)",
             DataType.DATE: "DATE",
-            DataType.DATETIME: "TIMESTAMP",
-            DataType.TIMESTAMP: "TIMESTAMPTZ",
-            DataType.JSON: "JSONB",
+            DataType.DATETIME: "DATETIME",
+            DataType.TIMESTAMP: "TIMESTAMP",
+            DataType.JSON: "JSON",
         }.get(dtype, "TEXT")
 
     def _build_create_table_query(
         self, table_name: str, column_mappings: List[ColumnMapping]
     ) -> str:
         col_defs = []
+        pk_cols = []
+
         for m in column_mappings:
             sql_type = self._map_datatype_to_sql(m.target_dtype)
 
@@ -229,10 +191,12 @@ class PostgresConnector(BaseDatabaseConnector):
                 DataType.INTEGER,
                 DataType.BIGINT,
             ):
-                col_defs.append(f'"{m.column_name}" SERIAL PRIMARY KEY')
+                col_defs.append(
+                    f"`{m.column_name}` {sql_type} NOT NULL AUTO_INCREMENT PRIMARY KEY"
+                )
                 continue
 
-            col_def = f'"{m.column_name}" {sql_type}'
+            col_def = f"`{m.column_name}` {sql_type}"
 
             if not m.is_nullable:
                 col_def += " NOT NULL"
@@ -245,4 +209,14 @@ class PostgresConnector(BaseDatabaseConnector):
 
             col_defs.append(col_def)
 
-        return f'CREATE TABLE "{table_name}" (\n  ' + ",\n  ".join(col_defs) + "\n)"
+            if m.is_primary_key:
+                pk_cols.append(f"`{m.column_name}`")
+
+        if pk_cols:
+            col_defs.append(f"PRIMARY KEY ({', '.join(pk_cols)})")
+
+        return (
+            f"CREATE TABLE `{table_name}` (\n  "
+            + ",\n  ".join(col_defs)
+            + "\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+        )

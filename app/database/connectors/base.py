@@ -7,11 +7,13 @@ from app.models.schemas import ColumnMapping, DatabaseConnection
 
 
 class BaseDatabaseConnector(ABC):
-    """Abstract base class for database connectors"""
+    """Abstract base class for all database connectors."""
 
     def __init__(self, connection: DatabaseConnection):
         self.connection = connection
         self._conn = None
+
+    # ── lifecycle ────────────────────────────────────────────────────────────
 
     @abstractmethod
     def connect(self) -> None:
@@ -21,18 +23,21 @@ class BaseDatabaseConnector(ABC):
     def disconnect(self) -> None:
         pass
 
+    def __enter__(self):
+        self.connect()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.disconnect()
+
+    # ── abstract interface ───────────────────────────────────────────────────
+
     @abstractmethod
     def test_connection(self) -> Dict[str, Any]:
         pass
 
     @abstractmethod
-    def summarize(self, preview_rows: int) -> Dict[str, Any]:
-        """
-        Provides detail information about the entire database
-
-        Returns:
-            Dict[str, Any]: list_of_tables with column_details, columns details have columns name, missing values etc.
-        """
+    def summarize(self, preview_rows: int = 5) -> Dict[str, Any]:
         pass
 
     @abstractmethod
@@ -51,67 +56,9 @@ class BaseDatabaseConnector(ABC):
 
     @abstractmethod
     def insert_data(
-        self, table_name: str, df: pd.DataFrame, batch_size: int = 1000
+        self, table_name: str, df: pd.DataFrame, batch_size: int = 10_000
     ) -> Dict[str, Any]:
         pass
-
-    def upload_dataframe(
-        self,
-        df: pd.DataFrame,
-        table_name: str,
-        column_mappings: List[ColumnMapping],
-        if_exists: str = "fail",
-        batch_size: int = 1000,
-    ) -> Dict[str, Any]:
-        """
-        Upload pandas DataFrame to database
-
-        Args:
-            df (pd.DataFrame): DataFrame to upload
-            table_name (str): Name of the table
-            column_mapping (List[ColumnMapping]): Column mapping configurations
-            if_exists (str, optional): Action if table already exists ("fail", "replace", "append"). Defaults to "fail".
-            batch_size (int, optional): Batch size for insertion. Defaults to 1000.
-
-        Returns:
-            Dict[str, Any]: Upload results
-        """
-        try:
-            self.connect()
-
-            exists = self.table_exists(table_name)
-
-            if exists:
-                if if_exists == "fail":
-                    raise ValueError(f"Table '{table_name}' already exists")
-
-                elif if_exists == "replace":
-                    self.drop_table(table_name=table_name)
-                    self.create_table(
-                        table_name=table_name, column_mappings=column_mappings
-                    )
-
-            if not exists:
-                self.create_table(
-                    table_name=table_name, column_mappings=column_mappings
-                )
-
-            result = self.insert_data(
-                table_name=table_name,
-                df=df,
-                batch_size=batch_size,
-            )
-
-            return {
-                "success": True,
-                "table_name": table_name,
-                "rows_inserted": result.get("rows_inserted", 0),
-                "rows_failed": result.get("rows_failed", 0),
-                "message": "Data uploaded successfully",
-            }
-
-        finally:
-            self.disconnect()
 
     @abstractmethod
     def create_index(
@@ -122,20 +69,54 @@ class BaseDatabaseConnector(ABC):
     ) -> None:
         pass
 
+    # ── concrete helpers ─────────────────────────────────────────────────────
+
+    def upload_dataframe(
+        self,
+        df: pd.DataFrame,
+        table_name: str,
+        column_mappings: List[ColumnMapping],
+        if_exists: str = "fail",
+        batch_size: int = 10_000,
+    ) -> Dict[str, Any]:
+        """
+        High-level helper: connects, creates/replaces table, inserts data.
+        Always disconnects in the finally block.
+        """
+        try:
+            self.connect()
+            exists = self.table_exists(table_name)
+
+            if exists:
+                if if_exists == "fail":
+                    raise ValueError(f"Table '{table_name}' already exists.")
+                elif if_exists == "replace":
+                    self.drop_table(table_name)
+                    self.create_table(table_name, column_mappings)
+                # "append" → fall through to insert without recreating
+
+            if not exists:
+                self.create_table(table_name, column_mappings)
+
+            result = self.insert_data(table_name, df, batch_size)
+
+            return {
+                "success": True,
+                "table_name": table_name,
+                "rows_inserted": result.get("rows_inserted", 0),
+                "rows_failed": result.get("rows_failed", 0),
+                "message": "Data uploaded successfully.",
+            }
+        finally:
+            self.disconnect()
+
     def _format_default_value(self, value: Any) -> str:
-        """Format default value for SQL"""
-        if isinstance(value, str):
-            return f"'{value}'"
-        elif value is None:
+        """Format a Python value as a SQL literal."""
+        if value is None:
             return "NULL"
-        else:
-            return str(value)
-
-    def __enter__(self):
-        """Context manager entry"""
-        self.connect()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manage exit"""
-        self.disconnect()
+        if isinstance(value, str):
+            safe = value.replace("'", "''")
+            return f"'{safe}'"
+        if isinstance(value, bool):
+            return "1" if value else "0"
+        return str(value)

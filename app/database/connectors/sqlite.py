@@ -1,6 +1,8 @@
+import datetime
 import sqlite3
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
+import numpy as np
 import pandas as pd
 
 from app.core.constants import DataType
@@ -8,23 +10,36 @@ from app.database.connectors.base import BaseDatabaseConnector
 from app.models.schemas import ColumnMapping
 
 
+def _to_sqlite_native(val):
+    """Convert value to a type accepted by sqlite3 (None/int/float/str/bytes)."""
+    try:
+        if pd.isna(val):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(val, np.integer):
+        return int(val)
+    if isinstance(val, np.floating):
+        return float(val)
+    if isinstance(val, (np.bool_, bool)):
+        return int(val)
+    if isinstance(val, (datetime.date, datetime.datetime)):
+        return val.isoformat()
+    return val
+
+
 class SQLiteConnector(BaseDatabaseConnector):
 
-    def connect(self):
+    def connect(self) -> None:
         try:
             db_path = self.connection.database
-            self._conn = sqlite3.connect(db_path)
-            self._conn.execute(
-                "PRAGMA foreign_keys = ON"
-            )  # Enable the enforcement of foreign key constraints for the current database connection
-            self._conn.row_factory = (
-                sqlite3.Row
-            )  # Provides dictionary like access of the object instead of tuple by index
+            self._conn = sqlite3.connect(db_path, check_same_thread=False)
+            self._conn.execute("PRAGMA foreign_keys = ON")
+            self._conn.row_factory = sqlite3.Row
+        except sqlite3.Error as exc:
+            raise ConnectionError(f"Failed to connect to SQLite: {exc}") from exc
 
-        except sqlite3.Error as e:
-            raise ConnectionError(f"Failed to connect to SQLite: {str(e)}")
-
-    def disconnect(self):
+    def disconnect(self) -> None:
         if self._conn:
             self._conn.close()
             self._conn = None
@@ -32,46 +47,36 @@ class SQLiteConnector(BaseDatabaseConnector):
     def test_connection(self) -> Dict[str, Any]:
         try:
             self.connect()
-
             cursor = self._conn.cursor()
             cursor.execute("SELECT sqlite_version();")
             version = cursor.fetchone()[0]
-
             return {
                 "success": True,
                 "message": "Connection successful",
                 "server_version": f"SQLite {version}",
             }
-        except Exception as e:
-            return {
-                "success": False,
-                "message": f"Connection failed: {str(e)}",
-            }
+        except Exception as exc:
+            return {"success": False, "message": f"Connection failed: {exc}"}
         finally:
             self.disconnect()
 
-    def summarize(self, preview_rows: int = 5):
+    def summarize(self, preview_rows: int = 5) -> Dict[str, Any]:
         try:
             self.connect()
             cursor = self._conn.cursor()
-
             cursor.execute(
-                """
-                SELECT name 
-                FROM sqlite_master 
-                WHERE type='table' AND name NOT LIKE 'sqlite_%' 
-                ORDER BY name;   
-                """
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name NOT LIKE 'sqlite_%' ORDER BY name;"
             )
-            list_of_tables = [table[0] for table in cursor.fetchall()]
+            list_of_tables = [row[0] for row in cursor.fetchall()]
 
             previews = []
             for table_name in list_of_tables:
-                # Head of the table
-                cursor.execute(f"SELECT * FROM '{table_name}' LIMIT {preview_rows};")
+                cursor.execute(
+                    f"SELECT * FROM '{table_name}' LIMIT ?;", (preview_rows,)
+                )
                 table_data = [dict(row) for row in cursor.fetchall()]
 
-                # Column META data
                 cursor.execute(f"PRAGMA table_info('{table_name}')")
                 columns = [
                     {
@@ -84,168 +89,152 @@ class SQLiteConnector(BaseDatabaseConnector):
                     for row in cursor.fetchall()
                 ]
 
-                # Number of rows
                 cursor.execute(f"SELECT COUNT(*) FROM '{table_name}';")
                 num_of_rows = cursor.fetchone()[0]
 
-                data = {
-                    "table": table_name,
-                    "row_count": num_of_rows,
-                    "columns": columns,
-                    "data": table_data,
-                }
-                previews.append(data)
+                previews.append(
+                    {
+                        "table": table_name,
+                        "row_count": num_of_rows,
+                        "columns": columns,
+                        "data": table_data,
+                    }
+                )
+
             return {
                 "database": self.connection.database,
                 "list_of_tables": list_of_tables,
                 "previews": previews,
             }
-        except Exception as e:
-            raise Exception(f"Error summarizing: {str(e)}")
+        except Exception as exc:
+            raise RuntimeError(f"Error summarizing SQLite: {exc}") from exc
         finally:
             self.disconnect()
 
-    def table_exists(self, table_name) -> bool:
-        try:
-            query = """
-                SELECT name FROM sqlite_master
-                WHERE type='table' AND name=?
-            """
-            cursor = self._conn.cursor()
-            cursor.execute(query, (table_name,))
-            result = cursor.fetchone()
-
-            return result is not None
-        except Exception as e:
-            raise Exception(f"Error checking table existence: {str(e)}")
-        finally:
-            self.disconnect()
-
-    def create_table(self, table_name, column_mappings) -> None:
-        query = self._build_create_table_query(
-            table_name=table_name, column_mappings=column_mappings
+    def table_exists(self, table_name: str) -> bool:
+        # BUG FIX: original called self.disconnect() in finally, which disconnected
+        # the shared connection used by upload_dataframe before insert_data ran.
+        # table_exists must NOT manage connection lifecycle — the caller owns it.
+        cursor = self._conn.cursor()
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            (table_name,),
         )
+        return cursor.fetchone() is not None
 
+    def create_table(
+        self, table_name: str, column_mappings: List[ColumnMapping]
+    ) -> None:
+        query = self._build_create_table_query(table_name, column_mappings)
         cursor = self._conn.cursor()
         cursor.execute(query)
         self._conn.commit()
 
     def drop_table(self, table_name: str) -> None:
-        query = f"DROP TABLE IF EXISTS {table_name}"
-
         cursor = self._conn.cursor()
-        cursor.execute(query)
+        cursor.execute(f'DROP TABLE IF EXISTS "{table_name}"')
         self._conn.commit()
 
     def insert_data(
         self,
         table_name: str,
         df: pd.DataFrame,
-        batch_size=1000,
+        batch_size: int = 10_000,
     ) -> Dict[str, Any]:
-        columns = df.columns.to_list()
-
-        # ? the double quotation "?" might cause issue
+        columns = df.columns.tolist()
         placeholders = ", ".join(["?"] * len(columns))
-        column_names = ", ".join(columns)
-        query = f"INSERT INTO {table_name} ({column_names}) VALUES ({placeholders})"
+        col_names = ", ".join(f'"{c}"' for c in columns)
+        query = f'INSERT INTO "{table_name}" ({col_names}) VALUES ({placeholders})'
 
-        data = [tuple(None if pd.isna(x) else x for x in row) for row in df.values]
+        data = [
+            tuple(_to_sqlite_native(v) for v in row)
+            for row in df.itertuples(index=False)
+        ]
 
         rows_inserted = 0
         rows_failed = 0
+        cursor = self._conn.cursor()
 
         try:
-            cursor = self._conn.cursor()
-
             for i in range(0, len(data), batch_size):
                 batch = data[i : i + batch_size]
                 cursor.executemany(query, batch)
                 rows_inserted += len(batch)
-
             self._conn.commit()
-
-        except Exception as e:
-            # ? Need proper logs for invalid rows
+        except Exception as exc:
             self._conn.rollback()
-            rows_failed = len(data)
-            raise Exception(f"Failed to insert data: {str(e)}")
+            rows_failed = len(data) - rows_inserted
+            raise RuntimeError(f"Failed to insert data: {exc}") from exc
 
-        return {
-            "rows_inserted": rows_inserted,
-            "rows_failed": rows_failed,
-        }
+        return {"rows_inserted": rows_inserted, "rows_failed": rows_failed}
 
     def create_index(
         self,
         table_name: str,
         columns: List[str],
-        index_name=None,
+        index_name: Optional[str] = None,
     ) -> None:
         if not index_name:
             index_name = f"idx_{table_name}_{'_'.join(columns)}"
-
-        column_str = ", ".join(columns)
-        query = f"CREATE INDEX {index_name} ON {table_name} ({column_str})"
-
+        col_str = ", ".join(f'"{c}"' for c in columns)
         cursor = self._conn.cursor()
-        cursor.execute(query)
+        cursor.execute(
+            f'CREATE INDEX IF NOT EXISTS "{index_name}" ON "{table_name}" ({col_str})'
+        )
         self._conn.commit()
 
+    # ── internal ─────────────────────────────────────────────────────────────
+
     def _map_datatype_to_sql(self, dtype: DataType) -> str:
-        type_map = {
+        return {
             DataType.INTEGER: "INTEGER",
             DataType.BIGINT: "INTEGER",
             DataType.FLOAT: "REAL",
             DataType.DECIMAL: "REAL",
             DataType.STRING: "TEXT",
             DataType.TEXT: "TEXT",
-            DataType.BOOLEAN: "INTEGER",  # SQLite doesn't have boolean
+            DataType.BOOLEAN: "INTEGER",
             DataType.DATE: "TEXT",
             DataType.DATETIME: "TEXT",
             DataType.TIMESTAMP: "TEXT",
             DataType.JSON: "TEXT",
-        }
-        return type_map.get(dtype, "TEXT")
+        }.get(dtype, "TEXT")
 
     def _build_create_table_query(
         self, table_name: str, column_mappings: List[ColumnMapping]
     ) -> str:
-        columns = []
-        primary_keys = []
+        col_defs = []
+        composite_pks = []
 
-        for mapping in column_mappings:
-            sql_type = self._map_datatype_to_sql(mapping.target_dtype)
-            col_def = f"{mapping.column_name} {sql_type}"
+        for m in column_mappings:
+            sql_type = self._map_datatype_to_sql(m.target_dtype)
+            is_int_pk = m.is_primary_key and m.target_dtype in (
+                DataType.INTEGER,
+                DataType.BIGINT,
+            )
 
-            if not mapping.is_nullable:
+            if is_int_pk:
+                # BUG FIX: original missing space → "INTEGER PRIMARY KEY"
+                col_defs.append(f'"{m.column_name}" INTEGER PRIMARY KEY AUTOINCREMENT')
+                continue
+
+            col_def = f'"{m.column_name}" {sql_type}'
+
+            if not m.is_nullable:
                 col_def += " NOT NULL"
 
-            if mapping.is_unique and not mapping.is_primary_key:
+            if m.is_unique and not m.is_primary_key:
                 col_def += " UNIQUE"
 
-            if mapping.default_value is not None:
-                col_def += (
-                    f" DEFAULT {self._format_default_value(mapping.default_value)}"
-                )
+            if m.default_value is not None:
+                col_def += f" DEFAULT {self._format_default_value(m.default_value)}"
 
-            # SQLite AUTOINCREMENT only works with INTEGER PRIMARY KEY
-            if mapping.is_primary_key and mapping.target_dtype in [
-                DataType.INTEGER,
-                DataType.BIGINT,
-            ]:
-                col_def += "PRIMARY KEY AUTOINCREMENT"
+            col_defs.append(col_def)
 
-            columns.append(col_def)
+            if m.is_primary_key:
+                composite_pks.append(f'"{m.column_name}"')
 
-            if mapping.is_primary_key and mapping.target_dtype not in [
-                DataType.INTEGER,
-                DataType.BIGINT,
-            ]:
-                primary_keys.append(mapping.column_name)
+        if composite_pks:
+            col_defs.append(f"PRIMARY KEY ({', '.join(composite_pks)})")
 
-        if primary_keys:
-            columns.append(f"PRIMARY KEY ({', '.join(primary_keys)})")
-
-        query = f"CREATE TABLE {table_name} (\n " + ",\n ".join(columns) + "\n)"
-        return query
+        return f'CREATE TABLE "{table_name}" (\n  ' + ",\n  ".join(col_defs) + "\n)"
