@@ -1,0 +1,168 @@
+services:
+  # ── TinyTeemo ETL API ─────────────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: tinyteemo
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    env_file:
+      - .env
+    environment:
+      # Override directory paths to match the bind-mount targets below
+      UPLOAD_DIR: /data/uploads
+      LOG_DIR: /data/logs
+      INVALID_ROWS_DIR: /data/invalid_rows
+    volumes:
+      - uploads:/data/uploads
+      - logs:/data/logs
+      - invalid_rows:/data/invalid_rows
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - teemo-net
+
+  # ── PostgreSQL ────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: tinyteemo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-teemo}
+      POSTGRES_USER: ${POSTGRES_USER:-teemo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-teemo_secret}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-teemo} -d ${POSTGRES_DB:-teemo}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - teemo-net
+
+  # ── MySQL ─────────────────────────────────────────────────────────────────
+  mysql:
+    image: mysql:8.4
+    container_name: tinyteemo-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DB:-teemo}
+      MYSQL_USER: ${MYSQL_USER:-teemo}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-teemo_secret}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_secret}
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "localhost",
+          "-u",
+          "${MYSQL_USER:-teemo}",
+          "--password=${MYSQL_PASSWORD:-teemo_secret}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - teemo-net
+
+  # ── For local dev: databases only (app runs on host with uv run dev) ─────────
+  # Usage: docker compose --profile db-only up -d
+  postgres-only:
+    image: postgres:16-alpine
+    container_name: tinyteemo-postgres-dev
+    profiles: [db-only]
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-teemo}
+      POSTGRES_USER: ${POSTGRES_USER:-teemo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-teemo_secret}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-teemo} -d ${POSTGRES_DB:-teemo}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - teemo-net
+
+  mysql-only:
+    image: mysql:8.4
+    container_name: tinyteemo-mysql-dev
+    profiles: [db-only]
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DB:-teemo}
+      MYSQL_USER: ${MYSQL_USER:-teemo}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-teemo_secret}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_secret}
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "localhost",
+          "-u",
+          "${MYSQL_USER:-teemo}",
+          "--password=${MYSQL_PASSWORD:-teemo_secret}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - teemo-net
+
+# ── Named volumes (data persists across restarts / rebuilds) ────────────────
+volumes:
+  postgres_data:
+  mysql_data:
+  uploads:
+  logs:
+  invalid_rows:
+
+# ── Isolated network so containers talk to each other by service name ───────
+networks:
+  teemo-net:
+    driver: bridge
