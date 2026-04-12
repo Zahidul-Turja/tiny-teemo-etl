@@ -1,10 +1,58 @@
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 import numpy as np
 import pandas as pd
 
 from app.core.constants import ALLOWED_EXTENSIONS
+
+
+def _is_string_col(col: pd.Series) -> bool:
+    """
+    True for both legacy numpy 'object' dtype and pandas 2.x StringDtype.
+    pd.api.types.is_string_dtype() covers both, but also matches 'object' columns
+    that hold mixed types. Checking dtype.name avoids that ambiguity.
+    """
+    return pd.api.types.is_string_dtype(col) or col.dtype == object
+
+
+# Common date format strings tried in order during type suggestion.
+# Trying explicit formats avoids pandas UserWarning about format inference.
+_COMMON_DATE_FORMATS = [
+    "%Y-%m-%d",
+    "%d-%m-%Y",
+    "%m-%d-%Y",
+    "%Y/%m/%d",
+    "%d/%m/%Y",
+    "%m/%d/%Y",
+    "%d.%m.%Y",
+    "%Y.%m.%d",
+    "%b %d, %Y",
+    "%B %d, %Y",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%d %H:%M:%S",
+]
+
+
+def _infer_date(sample: "pd.Series") -> None:
+    """
+    Raise if the sample cannot be parsed as dates.
+    Tries explicit formats first to avoid the pandas format-inference warning.
+    """
+    import warnings
+
+    for fmt in _COMMON_DATE_FORMATS:
+        try:
+            pd.to_datetime(sample, format=fmt, errors="raise")
+            return  # success
+        except Exception:
+            pass
+    # Last resort: let pandas guess — suppress the UserWarning it emits
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        result = pd.to_datetime(sample, errors="raise")
+    if result.isnull().all():
+        raise ValueError("all null after parsing")
 
 
 class FileProcessor:
@@ -16,73 +64,65 @@ class FileProcessor:
 
     @property
     def df(self) -> pd.DataFrame:
-        """Lazy load the DataFrame"""
-
+        """Lazy-load the DataFrame."""
         if self._df is None:
             self._df = self._read_file()
         return self._df
 
     def _read_file(self) -> pd.DataFrame:
-        """
-        Read file into pandas DataFrame
-
-        Returns:
-            DataFrame: contain file data
-        """
-
         if self.file_ext == ".csv":
-            for encoding in ["utf-8", "latin-1", "iso-8859-1"]:
+            for encoding in ["utf-8", "latin-1", "iso-8859-1", "cp1252"]:
                 try:
                     return pd.read_csv(self.file_path, encoding=encoding)
                 except UnicodeDecodeError:
                     continue
-            raise ValueError("Could not decode CSV file with supported encodings")
+            raise ValueError("Could not decode CSV file with any supported encoding.")
 
-        elif self.file_ext in [".xls", "xlsx"]:
-            return pd.read_excel(self.file_path)
+        elif self.file_ext in (".xls", ".xlsx"):
+            return pd.read_excel(
+                self.file_path,
+                engine="openpyxl" if self.file_ext == ".xlsx" else None,
+            )
+
+        elif self.file_ext == ".parquet":
+            return pd.read_parquet(self.file_path)
 
         else:
             raise ValueError(
-                f"Unsupported file extension: {self.file_ext}. Allowed extensions are: {", ".join(ALLOWED_EXTENSIONS)}"
+                f"Unsupported file extension: {self.file_ext}. "
+                f"Allowed: {', '.join(ALLOWED_EXTENSIONS)}"
             )
 
     def get_file_metadata(self) -> Dict[str, Any]:
-        """
-        Extract metadata from the file
-
-        Returns:
-            Dict[str, Any]: Dictionary containing file metadata
-        """
-
         df = self.df
 
+        # Derive a clean table name from the filename
         filename = os.path.basename(self.file_path)
-        table_name = os.path.splitext(filename)[0].split("_")[-1]
+        base = os.path.splitext(filename)[0]
+        # Strip timestamp/uuid prefix added by generate_unique_filename
+        table_name = base.split("_name")[-1] if "_name" in base else base
+        table_name = table_name.replace(" ", "_").replace("-", "_").lower() or base
 
-        columns_info = {}
+        columns_info: Dict[str, Any] = {}
         for col in df.columns:
             col_data = df[col]
-
-            dtype = str(col_data.dtype)
-
-            missing_count = int(col_data.isnull().sum())
-            unique_count = int(col_data.nunique())
-
             sample_values = col_data.dropna().head(5).tolist()
-
-            suggested_types = self._suggest_data_type(col_data)
+            sample_values = [
+                v.item() if hasattr(v, "item") else v for v in sample_values
+            ]
 
             columns_info[col] = {
-                "dtype": dtype,
-                "missing_count": missing_count,
-                "unique_count": unique_count,
+                "dtype": str(col_data.dtype),
+                "missing_count": int(col_data.isnull().sum()),
+                "unique_count": int(col_data.nunique()),
                 "sample_values": sample_values,
-                "suggested_type": suggested_types,
-                "is_numeric": pd.api.types.is_numeric_dtype(col_data),
-                "is_datetime": pd.api.types.is_datetime64_dtype(col_data),
+                "suggested_type": self._suggest_data_type(col_data),
+                "is_numeric": bool(pd.api.types.is_numeric_dtype(col_data)),
+                "is_datetime": bool(pd.api.types.is_datetime64_dtype(col_data)),
             }
 
         preview = df.head(5).replace({np.nan: None}).to_dict(orient="records")
+        preview = _make_json_safe(preview)
 
         return {
             "table_name": table_name,
@@ -95,75 +135,48 @@ class FileProcessor:
         }
 
     def _suggest_data_type(self, series: pd.Series) -> str:
-        """
-        Suggest appropriate SQL datatype based on column data
-
-        Args:
-            series (pd.Series): Pandas series to analyze
-
-        Returns:
-            str: Suggested SQL datatype
-        """
-
-        # Check if all null
         if series.isnull().all():
             return "string"
 
-        # Numerics
-        if pd.api.types.is_numeric_dtype(series):
-            if pd.api.types.is_integer_dtype(series):
-                if series.max() <= 2147483647:
-                    return "integer"
-                else:
-                    return "bigint"
-            else:
-                return "float"
-
-        # Boolean
         if pd.api.types.is_bool_dtype(series):
             return "boolean"
 
-        # Try to detect dates in object columns
-        if series.dtype == "object":
+        if pd.api.types.is_integer_dtype(series):
+            return "integer" if series.dropna().max() <= 2_147_483_647 else "bigint"
+
+        if pd.api.types.is_float_dtype(series):
+            return "float"
+
+        if pd.api.types.is_datetime64_dtype(series):
+            return "datetime"
+
+        # FIX: use _is_string_col() instead of `series.dtype == "object"`
+        # so pandas 2.x StringDtype columns are handled correctly
+        if _is_string_col(series):
             sample = series.dropna().head(100)
-
             if len(sample) > 0:
-                try:
-                    pd.to_datetime(sample, errors="raise")
-                    return "date"
-                except:
-                    pass
-
-                # Check for boolean
-                unique_vals = set(str(v).lower() for v in sample.unique())
+                unique_vals = {str(v).lower().strip() for v in sample.unique()}
                 if unique_vals.issubset({"true", "false", "1", "0", "yes", "no"}):
                     return "boolean"
 
-        # String or Text
-        if series.dtype == "object":
-            max_length = series.astype(str).str.len().max()
-            if max_length > 255:
-                return "text"
+                try:
+                    _infer_date(sample)
+                    return "date"
+                except Exception:
+                    pass
 
-            return "string"
+                # FIX: compute max_len on the full series, not the 100-row sample
+                max_len = series.dropna().astype(str).str.len().max()
+                return "text" if max_len > 255 else "string"
+
+        return "string"
 
     def get_column_stats(self, column_name: str) -> Dict[str, Any]:
-        """
-        Get detailed statistics for a specific column
-
-        Args:
-            column_name (str): Name of the column
-
-        Returns:
-            Dict[str, Any]: Dictionary with column statistics
-        """
-
         if column_name not in self.df.columns:
-            raise ValueError(f"Column: '{column_name}' not found in file")
+            raise ValueError(f"Column '{column_name}' not found in file.")
 
         col = self.df[column_name]
-
-        stats = {
+        stats: Dict[str, Any] = {
             "column_name": column_name,
             "dtype": str(col.dtype),
             "count": len(col),
@@ -172,29 +185,43 @@ class FileProcessor:
         }
 
         if pd.api.types.is_numeric_dtype(col):
+            clean = col.dropna()
             stats.update(
                 {
-                    "min": float(col.min()) if not pd.isna(col.min()) else None,
-                    "max": float(col.max()) if not pd.isna(col.max()) else None,
-                    "mean": float(col.mean()) if not pd.isna(col.mean()) else None,
-                    "median": float(col.median()) if not pd.isna(col.mean()) else None,
-                    "std": float(col.std()) if not pd.isna(col.mean()) else None,
+                    "min": float(clean.min()) if len(clean) else None,
+                    "max": float(clean.max()) if len(clean) else None,
+                    "mean": float(clean.mean()) if len(clean) else None,
+                    "median": float(clean.median()) if len(clean) else None,
+                    "std": float(clean.std()) if len(clean) else None,
+                }
+            )
+        # FIX: use _is_string_col() so StringDtype columns get length stats too
+        elif _is_string_col(col):
+            lengths = col.dropna().astype(str).str.len()
+            stats.update(
+                {
+                    "max_length": int(lengths.max()) if len(lengths) else 0,
+                    "min_length": int(lengths.min()) if len(lengths) else 0,
+                    "avg_length": float(lengths.mean()) if len(lengths) else 0.0,
                 }
             )
 
-        elif col.dtype == "object":
-            stats.update(
-                {
-                    "max_length": int(col.astype(str).str.len().max()),
-                    "min_length": int(col.astype(str).str.len().min()),
-                    "avg_length": float(col.astype(str).str.len().mean()),
-                }
-            )
-
-        # Top values
         value_counts = col.value_counts().head(10)
         stats["top_values"] = [
             {"value": str(k), "count": int(v)} for k, v in value_counts.items()
         ]
-
         return stats
+
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+
+def _make_json_safe(obj: Any) -> Any:
+    """Recursively convert numpy/pandas scalars to native Python types."""
+    if isinstance(obj, dict):
+        return {k: _make_json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_make_json_safe(v) for v in obj]
+    if hasattr(obj, "item"):
+        return obj.item()
+    return obj
