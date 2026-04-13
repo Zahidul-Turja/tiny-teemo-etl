@@ -2,13 +2,13 @@ from fastapi import APIRouter, status
 from fastapi.responses import JSONResponse
 
 from app.core.constants import DataType, DateFormat, DateTimeFormat
-from app.models.schemas import AvailableDataTypesResponse, DataTypeInfo
+from app.models.schemas import DataTypeInfo
 
 router = APIRouter()
 
 
-@router.get("/data-types", response_model=AvailableDataTypesResponse)
-def get_data_types():
+@router.get("/data-types", summary="List all supported data types")
+def get_data_types() -> JSONResponse:
     data_types = [
         DataTypeInfo(
             type_id=DataType.INTEGER.value,
@@ -19,13 +19,13 @@ def get_data_types():
         DataTypeInfo(
             type_id=DataType.BIGINT.value,
             display_name="Big Integer",
-            description="Large whole numbers",
+            description="Large whole numbers (> 2.1 billion)",
             requires_format=False,
         ),
         DataTypeInfo(
             type_id=DataType.FLOAT.value,
             display_name="Float",
-            description="Decimal numbers",
+            description="Decimal numbers (double precision)",
             requires_format=False,
         ),
         DataTypeInfo(
@@ -43,13 +43,19 @@ def get_data_types():
         DataTypeInfo(
             type_id=DataType.TEXT.value,
             display_name="Text",
-            description="Long text content",
+            description="Long-form text content",
             requires_format=False,
         ),
         DataTypeInfo(
             type_id=DataType.BOOLEAN.value,
             display_name="Boolean",
             description="True/False values",
+            requires_format=False,
+        ),
+        DataTypeInfo(
+            type_id=DataType.JSON.value,
+            display_name="JSON",
+            description="JSON stored as text",
             requires_format=False,
         ),
         DataTypeInfo(
@@ -80,51 +86,44 @@ def get_data_types():
         content={
             "success": True,
             "data": {
-                "data-types": [dt.model_dump() for dt in data_types],
+                "data_types": [dt.model_dump() for dt in data_types],
             },
         },
     )
 
 
-@router.get("date-formats")
+# BUG FIX: original route was "date-formats" (missing leading slash) which
+# FastAPI would silently accept but produce a 307 redirect for most clients.
+@router.get("/date-formats", summary="List all supported date formats with examples")
 def get_date_formats() -> JSONResponse:
     formats = [
-        {
-            "format": f.value,
-            "example": _get_date_example(f.value),
-        }
-        for f in DateFormat
+        {"format": f.value, "example": _date_example(f.value)} for f in DateFormat
     ]
-
-    return JSONResponse(
-        status_code=status.HTTP_200_OK,
-        content={
-            "success": True,
-            "data": {
-                "formats": formats,
-            },
-        },
-    )
-
-
-@router.get("/datetime-formats")
-def get_datetime_formats() -> JSONResponse:
-    formats = [
-        {
-            "format": f.value,
-            "example": _get_datetime_example(f.value),
-        }
-        for f in DateTimeFormat
-    ]
-
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content={"success": True, "data": {"formats": formats}},
     )
 
 
-def _get_date_example(format_str: str) -> str:
-    examples = {
+@router.get(
+    "/datetime-formats", summary="List all supported datetime formats with examples"
+)
+def get_datetime_formats() -> JSONResponse:
+    formats = [
+        {"format": f.value, "example": _datetime_example(f.value)}
+        for f in DateTimeFormat
+    ]
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"success": True, "data": {"formats": formats}},
+    )
+
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+
+def _date_example(fmt: str) -> str:
+    return {
         "YYYY-MM-DD": "2024-02-12",
         "YY-MM-DD": "24-02-12",
         "DD-MM-YYYY": "12-02-2024",
@@ -135,16 +134,14 @@ def _get_date_example(format_str: str) -> str:
         "DD/MM/YY": "12/02/24",
         "MMM DD, YYYY": "Feb 12, 2024",
         "MMMM DD, YYYY": "February 12, 2024",
-    }
-    return examples.get(format_str, "2026-02-12")
+    }.get(fmt, "2024-02-12")
 
 
-def _get_datetime_example(format_str: str) -> str:
-    examples = {
+def _datetime_example(fmt: str) -> str:
+    return {
         "YYYY-MM-DD HH:MM:SS": "2024-02-12 14:30:00",
         "DD-MM-YYYY HH:MM:SS": "12-02-2024 14:30:00",
         "MM-DD-YYYY HH:MM:SS": "02-12-2024 14:30:00",
         "YYYY-MM-DDTHH:MM:SS": "2024-02-12T14:30:00",
         "ISO8601": "2024-02-12T14:30:00Z",
-    }
-    return examples.get(format_str, "2024-02-12 14:30:00")
+    }.get(fmt, "2024-02-12 14:30:00")
