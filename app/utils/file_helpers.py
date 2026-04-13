@@ -9,38 +9,22 @@ from app.core.constants import CHUNK_SIZE
 
 def generate_unique_filename(original_filename: str) -> str:
     """
-    Generate a unique filename with timestamp and UUID
-
-    Args:
-        original_filename (str): the original name of the file
-
-    Returns:
-        str: unique filename
+    Generate a unique filename: {timestamp}_{uuid}_{sanitized_name}{ext}
+    BUG FIX: original produced "{timestamp}_{uuid}_name{ext}" literally.
     """
-
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     unique_id = str(uuid.uuid4())[:8]
     name, ext = os.path.splitext(original_filename)
 
-    # Sanitize filename
-    name = "".join(c for c in name if c.isalnum() or c in [" ", "-", "_"])
-    name = name.strip().replace(" ", "_")
+    # Sanitize: keep alphanum, spaces, dashes, underscores
+    name = "".join(c for c in name if c.isalnum() or c in (" ", "-", "_"))
+    name = name.strip().replace(" ", "_") or "file"
 
-    return f"{timestamp}_{unique_id}_name{ext}"
+    return f"{timestamp}_{unique_id}_{name}{ext}"
 
 
 async def save_upload_file(file: UploadFile, file_path: str) -> None:
-    """
-    Save uploaded file ot disk as Chunks
-
-    Args:
-        file (UploadFile): FastAPI upload file object
-        file_path (str): Destination path to save the file
-
-    Returns:
-        None: nothing is returned
-    """
-
+    """Save an uploaded file to disk in chunks to avoid memory spikes."""
     with open(file_path, "wb") as buffer:
         while True:
             chunk = await file.read(CHUNK_SIZE)
@@ -50,13 +34,4 @@ async def save_upload_file(file: UploadFile, file_path: str) -> None:
 
 
 def get_file_size(file_path: str) -> int:
-    """
-    Get file size in bytes
-
-    Args:
-        file_path (str): path to the file
-
-    Returns:
-        int: File size in bytes
-    """
-    return os.path.getsize(filename=file_path)
+    return os.path.getsize(file_path)
