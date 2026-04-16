@@ -285,17 +285,17 @@ Column types are inferred automatically. Supply `column_mappings` only when you 
 
 ## Configuration (`.env`)
 
-| Variable              | Default                  | Description                                        |
-| --------------------- | ------------------------ | -------------------------------------------------- | -------------------------------------------------- | --- |
-| `SECRET_KEY`          | _(required)_             | App secret — change in production                  |
-| `APP_PORT`            | `8000`                   | Host port to expose the API on                     |
-| `UPLOAD_DIR`          | `uploaded_files`         | Where uploaded files are stored                    |
-| `LOG_DIR`             | `logs`                   | Where per-job `.jsonl` log files go                |
-| `INVALID_ROWS_DIR`    | `invalid_rows`           | Where invalid-row CSVs are saved                   |
-| `DEFAULT_BATCH_SIZE`  | `10000`                  | Default rows per DB insert batch                   |
-| `MAX_RETRIES`         | `3`                      | Default retry attempts on DB upload failure        |
-| `RETRY_DELAY_SECONDS` | `2.0`                    | Base delay between retries (multiplied by attempt) |
-| <!--                  | `POSTGRES_*` / `MYSQL_*` | —                                                  | Only needed if using the `local-db` Docker profile | --> |
+| Variable                 | Default          | Description                                        |
+| ------------------------ | ---------------- | -------------------------------------------------- | --- |
+| `SECRET_KEY`             | _(required)_     | App secret — change in production                  |
+| `APP_PORT`               | `8000`           | Host port to expose the API on                     |
+| `UPLOAD_DIR`             | `uploaded_files` | Where uploaded files are stored                    |
+| `LOG_DIR`                | `logs`           | Where per-job `.jsonl` log files go                |
+| `INVALID_ROWS_DIR`       | `invalid_rows`   | Where invalid-row CSVs are saved                   |
+| `DEFAULT_BATCH_SIZE`     | `10000`          | Default rows per DB insert batch                   |
+| `MAX_RETRIES`            | `3`              | Default retry attempts on DB upload failure        |
+| `RETRY_DELAY_SECONDS`    | `2.0`            | Base delay between retries (multiplied by attempt) |
+| `POSTGRES_*` / `MYSQL_*` | —                | Only needed if using the `local-db` Docker profile |     |
 
 ---
 
