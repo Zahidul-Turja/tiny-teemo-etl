@@ -13,6 +13,7 @@ from app.database.connectors.sqlite import SQLiteConnector
 from app.models.schemas import ETLJobRequest, ETLJobResult
 from app.services.api_writer import APIWriter
 from app.services.etl_logger import ETLLogger
+from app.services.db_reader import read_from_db
 from app.services.file_processor import FileProcessor
 from app.services.file_writer import FileWriter
 from app.services.schema_mapper import (
@@ -73,7 +74,34 @@ def run_etl_job(request: ETLJobRequest) -> ETLJobResult:
             if request.api_source:
                 logger.info("Extracting from API", {"url": request.api_source.url})
                 df = _read_from_api(request.api_source, logger)
+
+            elif request.db_source:
+                src = request.db_source
+                label = src.table_name or "custom query"
+                logger.info(
+                    f"Extracting from DB: {src.connection.db_type.value} / {label}",
+                    {"db_type": src.connection.db_type.value, "source": label},
+                )
+                df, auto_mappings = read_from_db(src)
+                # Merge auto-generated mappings with any user-supplied ones.
+                # User mappings take precedence column-by-column.
+                if not request.column_mappings:
+                    request = request.model_copy(
+                        update={"column_mappings": auto_mappings}
+                    )
+                else:
+                    user_cols = {m.column_name for m in request.column_mappings}
+                    merged = list(request.column_mappings) + [
+                        m for m in auto_mappings if m.column_name not in user_cols
+                    ]
+                    request = request.model_copy(update={"column_mappings": merged})
+
             else:
+                if not request.file_id:
+                    raise ValueError(
+                        "No source specified. Provide one of: 'file_id', "
+                        "'api_source', or 'db_source'."
+                    )
                 file_path = os.path.join(settings.UPLOAD_DIR, request.file_id)
                 if not os.path.exists(file_path):
                     raise FileNotFoundError(f"Source file not found: {request.file_id}")

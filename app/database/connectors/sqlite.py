@@ -10,8 +10,8 @@ from app.database.connectors.base import BaseDatabaseConnector
 from app.models.schemas import ColumnMapping
 
 
-def _to_sqlite_native(val):
-    """Convert value to a type accepted by sqlite3 (None/int/float/str/bytes)."""
+def _to_sqlite_native(val: Any) -> Any:
+    """Convert a value to a type accepted by sqlite3 (None/int/float/str/bytes)."""
     try:
         if pd.isna(val):
             return None
@@ -26,6 +26,16 @@ def _to_sqlite_native(val):
     if isinstance(val, (datetime.date, datetime.datetime)):
         return val.isoformat()
     return val
+
+
+def _effective_name(m: ColumnMapping) -> str:
+    """Return the final column name after rename/prefix/suffix are applied."""
+    name = m.rename_to or m.column_name
+    if m.prefix:
+        name = f"{m.prefix}{name}"
+    if m.suffix:
+        name = f"{name}{m.suffix}"
+    return name
 
 
 class SQLiteConnector(BaseDatabaseConnector):
@@ -76,7 +86,6 @@ class SQLiteConnector(BaseDatabaseConnector):
                     f"SELECT * FROM '{table_name}' LIMIT ?;", (preview_rows,)
                 )
                 table_data = [dict(row) for row in cursor.fetchall()]
-
                 cursor.execute(f"PRAGMA table_info('{table_name}')")
                 columns = [
                     {
@@ -88,10 +97,8 @@ class SQLiteConnector(BaseDatabaseConnector):
                     }
                     for row in cursor.fetchall()
                 ]
-
                 cursor.execute(f"SELECT COUNT(*) FROM '{table_name}';")
                 num_of_rows = cursor.fetchone()[0]
-
                 previews.append(
                     {
                         "table": table_name,
@@ -100,7 +107,6 @@ class SQLiteConnector(BaseDatabaseConnector):
                         "data": table_data,
                     }
                 )
-
             return {
                 "database": self.connection.database,
                 "list_of_tables": list_of_tables,
@@ -112,9 +118,6 @@ class SQLiteConnector(BaseDatabaseConnector):
             self.disconnect()
 
     def table_exists(self, table_name: str) -> bool:
-        # BUG FIX: original called self.disconnect() in finally, which disconnected
-        # the shared connection used by upload_dataframe before insert_data ran.
-        # table_exists must NOT manage connection lifecycle — the caller owns it.
         cursor = self._conn.cursor()
         cursor.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
@@ -136,25 +139,19 @@ class SQLiteConnector(BaseDatabaseConnector):
         self._conn.commit()
 
     def insert_data(
-        self,
-        table_name: str,
-        df: pd.DataFrame,
-        batch_size: int = 10_000,
+        self, table_name: str, df: pd.DataFrame, batch_size: int = 10_000
     ) -> Dict[str, Any]:
         columns = df.columns.tolist()
         placeholders = ", ".join(["?"] * len(columns))
         col_names = ", ".join(f'"{c}"' for c in columns)
         query = f'INSERT INTO "{table_name}" ({col_names}) VALUES ({placeholders})'
-
         data = [
             tuple(_to_sqlite_native(v) for v in row)
             for row in df.itertuples(index=False)
         ]
 
         rows_inserted = 0
-        rows_failed = 0
         cursor = self._conn.cursor()
-
         try:
             for i in range(0, len(data), batch_size):
                 batch = data[i : i + batch_size]
@@ -163,16 +160,11 @@ class SQLiteConnector(BaseDatabaseConnector):
             self._conn.commit()
         except Exception as exc:
             self._conn.rollback()
-            rows_failed = len(data) - rows_inserted
             raise RuntimeError(f"Failed to insert data: {exc}") from exc
-
-        return {"rows_inserted": rows_inserted, "rows_failed": rows_failed}
+        return {"rows_inserted": rows_inserted, "rows_failed": 0}
 
     def create_index(
-        self,
-        table_name: str,
-        columns: List[str],
-        index_name: Optional[str] = None,
+        self, table_name: str, columns: List[str], index_name: Optional[str] = None
     ) -> None:
         if not index_name:
             index_name = f"idx_{table_name}_{'_'.join(columns)}"
@@ -183,7 +175,7 @@ class SQLiteConnector(BaseDatabaseConnector):
         )
         self._conn.commit()
 
-    # ── internal ─────────────────────────────────────────────────────────────
+    # ── internal ──────────────────────────────────────────────────────────────
 
     def _map_datatype_to_sql(self, dtype: DataType) -> str:
         return {
@@ -208,31 +200,27 @@ class SQLiteConnector(BaseDatabaseConnector):
 
         for m in column_mappings:
             sql_type = self._map_datatype_to_sql(m.target_dtype)
+            eff = _effective_name(m)
             is_int_pk = m.is_primary_key and m.target_dtype in (
                 DataType.INTEGER,
                 DataType.BIGINT,
             )
 
             if is_int_pk:
-                # BUG FIX: original missing space → "INTEGER PRIMARY KEY"
-                col_defs.append(f'"{m.column_name}" INTEGER PRIMARY KEY AUTOINCREMENT')
+                col_defs.append(f'"{eff}" INTEGER PRIMARY KEY AUTOINCREMENT')
                 continue
 
-            col_def = f'"{m.column_name}" {sql_type}'
-
+            col_def = f'"{eff}" {sql_type}'
             if not m.is_nullable:
                 col_def += " NOT NULL"
-
             if m.is_unique and not m.is_primary_key:
                 col_def += " UNIQUE"
-
             if m.default_value is not None:
                 col_def += f" DEFAULT {self._format_default_value(m.default_value)}"
-
             col_defs.append(col_def)
 
             if m.is_primary_key:
-                composite_pks.append(f'"{m.column_name}"')
+                composite_pks.append(f'"{eff}"')
 
         if composite_pks:
             col_defs.append(f"PRIMARY KEY ({', '.join(composite_pks)})")

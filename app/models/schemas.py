@@ -20,9 +20,6 @@ from app.core.constants import (
 class ColumnInfo(BaseModel):
     name: str
     dtype: str
-    # BUG FIX: original had alias mismatch - constructor used "missing_value_count"
-    # but model_dump() would output alias names, breaking JSON responses.
-    # Removed aliases; callers just use the plain field names.
     missing_value_count: int = 0
     unique_value_count: int = 0
     sample_values: Optional[List[Any]] = None
@@ -50,13 +47,11 @@ class ColumnMapping(BaseModel):
     column_name: str
     source_dtype: str
     target_dtype: DataType
-    # Optional rename: if set, the output column will use this name
     rename_to: Optional[str] = None
     prefix: Optional[str] = None
     suffix: Optional[str] = None
     date_format: Optional[DateFormat] = None
     datetime_format: Optional[DateTimeFormat] = None
-    # BUG FIX: was str, should be int
     max_length: Optional[int] = None
     is_nullable: bool = True
     is_primary_key: bool = False
@@ -78,7 +73,6 @@ class ColumnMapping(BaseModel):
 class FilterRule(BaseModel):
     column: str
     operator: FilterOperator
-    # value is not required for IS_NULL / IS_NOT_NULL
     value: Optional[Any] = None
     values: Optional[List[Any]] = None  # used by IN / NOT_IN
 
@@ -121,7 +115,6 @@ class DataTypeInfo(BaseModel):
     type_id: str
     display_name: str
     description: Optional[str] = None
-    # BUG FIX: typo "requires_forma" → "requires_format"
     requires_format: bool = False
     available_formats: Optional[List[str]] = None
 
@@ -146,7 +139,6 @@ class DatabaseConnection(BaseModel):
     def set_default_port(cls, val, info):
         if val is None:
             db_type = info.data.get("db_type")
-            # BUG FIX: original had duplicate MSSQL key so MySQL default was lost
             default_ports = {
                 DatabaseType.POSTGRESQL: 5432,
                 DatabaseType.MYSQL: 3306,
@@ -220,12 +212,40 @@ class APISource(BaseModel):
 
 
 # ─────────────────────────────────────────────
+#  Database Source (read from a DB table/query)
+# ─────────────────────────────────────────────
+class DatabaseSource(BaseModel):
+    connection: DatabaseConnection
+
+    # Exactly one of table_name or query must be set
+    table_name: Optional[str] = None
+    query: Optional[str] = None
+
+    # Optional column whitelist — if omitted, all columns are extracted
+    columns: Optional[List[str]] = None
+
+    # chunk_size=0 means load everything in one shot
+    chunk_size: int = Field(
+        default=0, ge=0, description="Rows per chunk. 0 = no chunking."
+    )
+
+    @model_validator(mode="after")
+    def validate_source(self):
+        if not self.table_name and not self.query:
+            raise ValueError("Either 'table_name' or 'query' must be provided.")
+        if self.table_name and self.query:
+            raise ValueError("Only one of 'table_name' or 'query' may be provided.")
+        return self
+
+
+# ─────────────────────────────────────────────
 #  Full ETL Job request
 # ─────────────────────────────────────────────
 class ETLJobRequest(BaseModel):
     # Source — exactly one required
     file_id: Optional[str] = None
     api_source: Optional[APISource] = None
+    db_source: Optional[DatabaseSource] = None
 
     # Transformations
     column_mappings: List[ColumnMapping]
@@ -244,10 +264,15 @@ class ETLJobRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_source_and_destinations(self):
-        if not self.file_id and not self.api_source:
-            raise ValueError("Either file_id or api_source must be provided.")
-        if self.file_id and self.api_source:
-            raise ValueError("Only one of file_id or api_source may be provided.")
+        sources = [
+            s for s in [self.file_id, self.api_source, self.db_source] if s is not None
+        ]
+        if len(sources) == 0:
+            raise ValueError(
+                "One of 'file_id', 'api_source', or 'db_source' must be provided."
+            )
+        if len(sources) > 1:
+            raise ValueError("Only one source may be provided at a time.")
         if not any([self.db_destination, self.file_destination, self.api_destination]):
             raise ValueError("At least one destination must be specified.")
         return self
@@ -295,3 +320,26 @@ class ETLJobResult(BaseModel):
     invalid_rows_file: Optional[str] = None
     log_file: Optional[str] = None
     details: Optional[Dict[str, Any]] = None
+
+
+# ─────────────────────────────────────────────
+#  DB Migration request (convenience wrapper)
+# ─────────────────────────────────────────────
+class DBMigrationRequest(BaseModel):
+    """
+    Migrate data from a source DB to a destination DB.
+    All transform/filter/validate features of ETLJobRequest are available.
+    column_mappings is optional — omit to migrate columns as-is.
+    """
+
+    source: DatabaseSource
+
+    column_mappings: Optional[List[ColumnMapping]] = None
+    filters: Optional[List[FilterRule]] = None
+    aggregations: Optional[AggregationRule] = None
+    validation_rules: Optional[List[ValidationRule]] = None
+
+    db_destination: DatabaseDestination
+
+    batch_size: int = Field(default=10_000, gt=0, le=100_000)
+    max_retries: int = Field(default=3, ge=0, le=10)

@@ -69,6 +69,54 @@ class BaseDatabaseConnector(ABC):
     ) -> None:
         pass
 
+    def read_dataframe(
+        self,
+        table_name: Optional[str] = None,
+        query: Optional[str] = None,
+        columns: Optional[List[str]] = None,
+        chunk_size: int = 0,
+    ) -> "pd.DataFrame":
+        """
+        Extract data from the source DB into a pandas DataFrame.
+        Caller must supply exactly one of table_name or query.
+        chunk_size=0 loads everything at once; >0 yields in chunks (merged here).
+        """
+        import pandas as pd
+
+        if not table_name and not query:
+            raise ValueError("Either table_name or query must be provided.")
+
+        try:
+            self.connect()
+
+            if query:
+                sql = query
+            else:
+                if columns:
+                    col_str = ", ".join(f'"{c}"' for c in columns)
+                else:
+                    col_str = "*"
+                sql = f'SELECT {col_str} FROM "{table_name}"'
+
+            if chunk_size and chunk_size > 0:
+                chunks = []
+                offset = 0
+                while True:
+                    chunk_sql = f"{sql} LIMIT {chunk_size} OFFSET {offset}"
+                    df_chunk = pd.read_sql(chunk_sql, self._conn)
+                    if df_chunk.empty:
+                        break
+                    chunks.append(df_chunk)
+                    offset += chunk_size
+                return (
+                    pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
+                )
+            else:
+                return pd.read_sql(sql, self._conn)
+
+        finally:
+            self.disconnect()
+
     # ── concrete helpers ─────────────────────────────────────────────────────
 
     def upload_dataframe(
