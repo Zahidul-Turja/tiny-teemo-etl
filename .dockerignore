@@ -22,7 +22,7 @@ invalid_rows/
 *.sqlite
 
 # Dev / CI
-tests/
+# tests/
 .env
 .env.*
 !.env.example
