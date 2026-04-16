@@ -67,23 +67,27 @@ docker compose run --rm test -k test_migration   # filter tests
 docker compose run --rm test --tb=long           # verbose output
 
 # ── Local dev databases (optional) ──────────────────────────────────────────
-# If you don't have a Postgres or MySQL running locally and want one for
+# If you don't have a Postgres or MySQL running locally and want just for
 # testing, you can spin up lightweight containers on demand:
 
-docker compose --profile local-db up -d          # start Postgres + MySQL
-docker compose --profile local-db down           # stop them (data kept)
-docker compose --profile local-db down -v        # stop and wipe data
+sudo docker compose -f docker-compose-db.yml up -d
 
-# Connection details for the local-db containers:
-#   Postgres → host: localhost  port: 5432  db/user/pass: see .env
-#   MySQL    → host: localhost  port: 3306  db/user/pass: see .env
+# Connection details for the Databases containers:
+#   Postgres 1 → host: localhost  port: 5433, db: test_db_1, user: test_user_1, password: test_pass_1
+#   Postgres 2 → host: localhost  port: 5434, db: test_db_2, user: test_user_2, password: test_pass_2
+#   MySQL 1   → host: localhost  port: 3307, db: test_db_1, user: test_user_1, password: test_pass_1, root_password: root_pass_1
+#   MySQL 2   → host: localhost  port: 3308, db: test_db_2, user: test_user_2, password: test_pass_2, root_password: root_pass_2
+
+# Please look into docker-compose-db.yml file for more details about the Test Databases
 ```
 
 ### Why no databases in the default compose?
 
 TinyTeemo is a tool, not a database host. Your production Postgres or MySQL lives on your own server or cloud — TinyTeemo just connects to it via credentials you supply in the API request. Starting extra DB containers by default would imply those are the databases you migrate to/from, which is wrong.
 
-The `local-db` profile exists purely as a convenience for local development and testing.
+<!-- The `local-db` profile exists purely as a convenience for local development and testing. -->
+
+The `docker-compose-db.yml` exists purely as a convenience for local development and testing.
 
 ---
 
@@ -281,17 +285,17 @@ Column types are inferred automatically. Supply `column_mappings` only when you 
 
 ## Configuration (`.env`)
 
-| Variable                 | Default          | Description                                        |
-| ------------------------ | ---------------- | -------------------------------------------------- |
-| `SECRET_KEY`             | _(required)_     | App secret — change in production                  |
-| `APP_PORT`               | `8000`           | Host port to expose the API on                     |
-| `UPLOAD_DIR`             | `uploaded_files` | Where uploaded files are stored                    |
-| `LOG_DIR`                | `logs`           | Where per-job `.jsonl` log files go                |
-| `INVALID_ROWS_DIR`       | `invalid_rows`   | Where invalid-row CSVs are saved                   |
-| `DEFAULT_BATCH_SIZE`     | `10000`          | Default rows per DB insert batch                   |
-| `MAX_RETRIES`            | `3`              | Default retry attempts on DB upload failure        |
-| `RETRY_DELAY_SECONDS`    | `2.0`            | Base delay between retries (multiplied by attempt) |
-| `POSTGRES_*` / `MYSQL_*` | —                | Only needed if using the `local-db` Docker profile |
+| Variable              | Default                  | Description                                        |
+| --------------------- | ------------------------ | -------------------------------------------------- | -------------------------------------------------- | --- |
+| `SECRET_KEY`          | _(required)_             | App secret — change in production                  |
+| `APP_PORT`            | `8000`                   | Host port to expose the API on                     |
+| `UPLOAD_DIR`          | `uploaded_files`         | Where uploaded files are stored                    |
+| `LOG_DIR`             | `logs`                   | Where per-job `.jsonl` log files go                |
+| `INVALID_ROWS_DIR`    | `invalid_rows`           | Where invalid-row CSVs are saved                   |
+| `DEFAULT_BATCH_SIZE`  | `10000`                  | Default rows per DB insert batch                   |
+| `MAX_RETRIES`         | `3`                      | Default retry attempts on DB upload failure        |
+| `RETRY_DELAY_SECONDS` | `2.0`                    | Base delay between retries (multiplied by attempt) |
+| <!--                  | `POSTGRES_*` / `MYSQL_*` | —                                                  | Only needed if using the `local-db` Docker profile | --> |
 
 ---
 
