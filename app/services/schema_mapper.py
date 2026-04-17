@@ -131,8 +131,7 @@ class SchemaMapper:
         result = col.where(col.isnull(), col.astype(str))
         if mapping.max_length:
             result = result.str[: mapping.max_length]
-        # BUG FIX: original used replace("nan", np.nan) which doesn't work on Series
-        # .where() above preserves NaN correctly
+
         return result
 
     def _to_boolean(self, col: pd.Series, mapping: ColumnMapping) -> pd.Series:

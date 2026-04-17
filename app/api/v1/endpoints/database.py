@@ -54,7 +54,6 @@ async def test_database_connection(request: TestConnectionRequest) -> JSONRespon
 
 @router.get("/supported-types", summary="List supported database types")
 def get_supported_databases() -> JSONResponse:
-    # BUG FIX: original listed "MySQL" but used MSSQL enum value; renamed correctly
     databases = [
         {
             "type": DatabaseType.POSTGRESQL.value,
@@ -121,9 +120,6 @@ async def upload_to_database(request: UploadToDBRequest) -> JSONResponse:
             batch_size=request.batch_size,
         )
 
-        # BUG FIX: original had a stray `pass` statement then immediately opened
-        # `with connector:` — which called connect() AFTER upload_dataframe already
-        # called disconnect(). Fixed: open a fresh connection for index creation.
         if request.create_index and request.index_columns:
             try:
                 with _get_connector(request.connection) as conn:
@@ -174,8 +170,6 @@ async def database_summary(request: TestConnectionRequest) -> JSONResponse:
         )
 
 
-# BUG FIX: original used GET with a request body (TestConnectionRequest),
-# which is not supported by HTTP spec / most clients. Changed to POST.
 @router.post("/table-exists/{table_name}", summary="Check whether a table exists")
 async def check_table_exists(
     request: TestConnectionRequest, table_name: str

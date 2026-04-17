@@ -103,7 +103,6 @@ PANDAS_TO_SQL_TYPE_MAP = {
     "datetime64[ns]": DataType.TIMESTAMP,
 }
 
-# BUG FIX: original was missing leading dot on "xlsx"
 ALLOWED_EXTENSIONS = {".csv", ".xls", ".xlsx", ".parquet"}
 
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB

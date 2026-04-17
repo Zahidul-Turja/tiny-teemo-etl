@@ -10,7 +10,6 @@ from app.core.constants import CHUNK_SIZE
 def generate_unique_filename(original_filename: str) -> str:
     """
     Generate a unique filename: {timestamp}_{uuid}_{sanitized_name}{ext}
-    BUG FIX: original produced "{timestamp}_{uuid}_name{ext}" literally.
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     unique_id = str(uuid.uuid4())[:8]

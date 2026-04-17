@@ -92,8 +92,6 @@ def get_data_types() -> JSONResponse:
     )
 
 
-# BUG FIX: original route was "date-formats" (missing leading slash) which
-# FastAPI would silently accept but produce a 307 redirect for most clients.
 @router.get("/date-formats", summary="List all supported date formats with examples")
 def get_date_formats() -> JSONResponse:
     formats = [
