@@ -9,17 +9,13 @@ from app.core.constants import CHUNK_SIZE
 
 def generate_unique_filename(original_filename: str) -> str:
     """
-    Generate a unique filename: {timestamp}_{uuid}_{sanitized_name}{ext}
+    Generate a unique filename: {timestamp}_{uuid}{ext}
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    unique_id = str(uuid.uuid4())[:8]
-    name, ext = os.path.splitext(original_filename)
+    unique_id = str(uuid.uuid4())[:18]
+    _, ext = os.path.splitext(original_filename)
 
-    # Sanitize: keep alphanum, spaces, dashes, underscores
-    name = "".join(c for c in name if c.isalnum() or c in (" ", "-", "_"))
-    name = name.strip().replace(" ", "_") or "file"
-
-    return f"{timestamp}_{unique_id}_{name}{ext}"
+    return f"{timestamp}_{unique_id}{ext}"
 
 
 async def save_upload_file(file: UploadFile, file_path: str) -> None:
