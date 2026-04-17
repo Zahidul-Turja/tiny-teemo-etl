@@ -150,8 +150,6 @@ class FileProcessor:
         if pd.api.types.is_datetime64_dtype(series):
             return "datetime"
 
-        # FIX: use _is_string_col() instead of `series.dtype == "object"`
-        # so pandas 2.x StringDtype columns are handled correctly
         if _is_string_col(series):
             sample = series.dropna().head(100)
             if len(sample) > 0:
@@ -165,7 +163,6 @@ class FileProcessor:
                 except Exception:
                     pass
 
-                # FIX: compute max_len on the full series, not the 100-row sample
                 max_len = series.dropna().astype(str).str.len().max()
                 return "text" if max_len > 255 else "string"
 
@@ -195,7 +192,6 @@ class FileProcessor:
                     "std": float(clean.std()) if len(clean) else None,
                 }
             )
-        # FIX: use _is_string_col() so StringDtype columns get length stats too
         elif _is_string_col(col):
             lengths = col.dropna().astype(str).str.len()
             stats.update(

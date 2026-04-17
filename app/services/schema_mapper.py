@@ -99,7 +99,6 @@ class SchemaMapper:
 
     def _to_integer(self, col: pd.Series, mapping: ColumnMapping) -> pd.Series:
         try:
-            # FIX: cover both numpy 'object' and pandas 2.x StringDtype
             if pd.api.types.is_string_dtype(col) or col.dtype == object:
                 col = (
                     col.astype(str)

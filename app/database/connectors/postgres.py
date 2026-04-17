@@ -128,7 +128,7 @@ class PostgresConnector(BaseDatabaseConnector):
             self.disconnect()
 
     def table_exists(self, table_name: str) -> bool:
-        # Same pattern as SQLite: caller owns the connection lifecycle
+        # Caller owns the connection lifecycle
         cursor = self._conn.cursor()
         cursor.execute(
             """

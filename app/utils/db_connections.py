@@ -88,23 +88,3 @@ class SQLiteDB:
 
         except Exception as e:
             traceback.print_exc()
-
-
-# """
-# columns [
-#     {
-#         "name": id,
-#         "type": int,
-#         "is_primary_key": True,
-#         "is_unique": True,
-#         "auto_increment": True,
-#         "is_null": False,
-#         "length": 100,
-#     }
-# ]
-# """
-
-# "unique_together": [
-#             "column_1",
-#             "column_2",
-#         ]

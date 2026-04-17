@@ -59,7 +59,7 @@ def test():
                 "pytest",
                 "tests/",
                 "-v",
-                *sys.argv[1:],  # forward any extra args, e.g. uv run test -k my_test
+                *sys.argv[1:],
             ]
         )
     )
