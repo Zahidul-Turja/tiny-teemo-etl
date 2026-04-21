@@ -10,6 +10,8 @@ services:
       POSTGRES_PASSWORD: test_pass_1
     volumes:
       - postgres_1_data:/var/lib/postgresql/data
+    networks:
+      - etl-teemo_teemo-net
 
   postgres_2:
     image: postgres:16
@@ -54,3 +56,7 @@ volumes:
   postgres_2_data:
   mysql_1_data:
   mysql_2_data:
+
+networks:
+  etl-teemo_teemo-net:
+    external: true

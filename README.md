@@ -70,24 +70,22 @@ docker compose run --rm test --tb=long           # verbose output
 # If you don't have a Postgres or MySQL running locally and want just for
 # testing, you can spin up lightweight containers on demand:
 
-sudo docker compose -f docker-compose-db.yml up -d
+docker compose --profile local-db up -d          # start Postgres + MySQL
+docker compose --profile local-db down           # stop them (data kept)
+docker compose --profile local-db down -v        # stop and wipe data
 
-# Connection details for the Databases containers:
-#   Postgres 1 → host: localhost  port: 5433, db: test_db_1, user: test_user_1, password: test_pass_1
-#   Postgres 2 → host: localhost  port: 5434, db: test_db_2, user: test_user_2, password: test_pass_2
-#   MySQL 1   → host: localhost  port: 3307, db: test_db_1, user: test_user_1, password: test_pass_1, root_password: root_pass_1
-#   MySQL 2   → host: localhost  port: 3308, db: test_db_2, user: test_user_2, password: test_pass_2, root_password: root_pass_2
-
-# Please look into docker-compose-db.yml file for more details about the Test Databases
+# Connection details for the local-db containers:
+#   Postgres → host: localhost  port: 5432  db/user/pass: see .env
+#   MySQL    → host: localhost  port: 3306  db/user/pass: see .env
 ```
 
 ### Why no databases in the default compose?
 
 TinyTeemo is a tool, not a database host. Your production Postgres or MySQL lives on your own server or cloud — TinyTeemo just connects to it via credentials you supply in the API request. Starting extra DB containers by default would imply those are the databases you migrate to/from, which is wrong.
 
-<!-- The `local-db` profile exists purely as a convenience for local development and testing. -->
+The `local-db` profile exists purely as a convenience for local development and testing.
 
-The `docker-compose-db.yml` exists purely as a convenience for local development and testing.
+<!-- The `docker-compose-db.yml` exists purely as a convenience for local development and testing. -->
 
 ---
 
