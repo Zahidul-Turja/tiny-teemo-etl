@@ -32,6 +32,35 @@ services:
     networks:
       - teemo-net
 
+  # For development
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder # reuse the stage that already has all deps installed
+    container_name: tinyteemo-dev
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    env_file:
+      - .env
+    environment:
+      UPLOAD_DIR: /tmp/teemo/uploads
+      LOG_DIR: /tmp/teemo/logs
+      INVALID_ROWS_DIR: /tmp/teemo/invalid_rows
+      SECRET_KEY: dev-secret-key
+      PATH: /app/.venv/bin:/usr/local/bin:/usr/bin:/bin
+    volumes:
+      - ./app:/app/app
+      - ./main.py:/app/main.py
+    networks:
+      - teemo-net
+    command: >
+      python -m uvicorn main:app
+      --host 0.0.0.0
+      --port 8000
+      --reload
+
   # ── Test runner ───────────────────────────────────────────────────────────
   # Runs the pytest suite inside Docker against your CURRENT source files.
   #

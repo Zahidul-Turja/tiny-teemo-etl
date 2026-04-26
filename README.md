@@ -55,6 +55,9 @@ TinyTeemo connects to **your existing databases** — it does not own or manage 
 # Start the API
 docker compose up -d
 
+# For development
+docker compose up dev -d
+
 # View logs
 docker compose logs -f app
 
