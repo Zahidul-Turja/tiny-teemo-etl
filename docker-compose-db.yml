@@ -11,7 +11,7 @@ services:
     volumes:
       - postgres_1_data:/var/lib/postgresql/data
     networks:
-      - etl-teemo_teemo-net
+      - teemo-network
 
   postgres_2:
     image: postgres:16
@@ -58,5 +58,5 @@ volumes:
   mysql_2_data:
 
 networks:
-  etl-teemo_teemo-net:
+  teemo-network:
     external: true

@@ -148,3 +148,4 @@ volumes:
 networks:
   teemo-net:
     driver: bridge
+    name: teemo-network
