@@ -24,6 +24,8 @@ services:
       POSTGRES_PASSWORD: test_pass_2
     volumes:
       - postgres_2_data:/var/lib/postgresql/data
+    networks:
+      - teemo-network
 
   mysql_1:
     image: mysql:8.4
@@ -37,6 +39,8 @@ services:
       MYSQL_ROOT_PASSWORD: root_pass_1
     volumes:
       - mysql_1_data:/var/lib/mysql
+    networks:
+      - teemo-network
 
   mysql_2:
     image: mysql:8.4
@@ -50,6 +54,8 @@ services:
       MYSQL_ROOT_PASSWORD: root_pass_2
     volumes:
       - mysql_2_data:/var/lib/mysql
+    networks:
+      - teemo-network
 
 volumes:
   postgres_1_data:
