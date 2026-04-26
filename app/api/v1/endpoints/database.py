@@ -1,7 +1,9 @@
 import os
 
 from fastapi import APIRouter, HTTPException, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
+
 
 from app.core.constants import DatabaseType
 from app.database.connectors.mysql import MySQLConnector
@@ -157,16 +159,18 @@ async def database_summary(request: TestConnectionRequest) -> JSONResponse:
         data = connector.summarize()
         return JSONResponse(
             status_code=status.HTTP_200_OK,
-            content={
-                "success": True,
-                "message": "Data fetched successfully.",
-                "data": data,
-            },
+            content=jsonable_encoder(
+                {
+                    "success": True,
+                    "message": "Data fetched successfully.",
+                    "data": data,
+                }
+            ),
         )
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error fetching database summary: {exc}",
+            detail=f"Error fetching database summary balaalal: {exc}",
         )
 
 
