@@ -32,7 +32,7 @@ async def upload_file(file: UploadFile = File(...)) -> JSONResponse:
     if file_size > MAX_FILE_SIZE:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"File exceeds the {MAX_FILE_SIZE // (1024 * 1024)} MB limit.",
+            detail=f"File too large ({file_size / (1024**3):.2f} GB). Maximum allowed size is {MAX_FILE_SIZE / (1024**3):.0f} GB.",
         )
 
     unique_filename = generate_unique_filename(file.filename or "upload")
