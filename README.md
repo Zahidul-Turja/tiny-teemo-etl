@@ -1,361 +1,311 @@
-# TinyTeemo — ETL
+# 🐾 TinyTeemo ETL
 
-A lightweight, self-contained ETL system built with **FastAPI** and **pandas**.
+**A production-grade ETL system** — extract from files, databases, or REST APIs; transform with type casting, filtering, and validation; load into any database — all with live WebSocket progress streaming and background task processing.
 
-Connect it to your existing databases and files, configure your transformations, and run. No infrastructure to own — TinyTeemo is just the pipeline tool.
-
----
-
-## What it does
-
-| Step          | What happens                                                                                                                             |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| **Extract**   | Read from CSV / Excel / Parquet, a paginated REST API, or any Postgres / MySQL / SQLite database (table or custom SQL query)             |
-| **Filter**    | Drop rows that don't match your rules before any processing                                                                              |
-| **Transform** | Cast types, rename columns, add prefix/suffix, strip `$` and `,` from numbers                                                            |
-| **Validate**  | Check rules (not-null, unique, min/max, regex, email, allowed values…); invalid rows are saved to a CSV with the failure reason attached |
-| **Aggregate** | Optional group-by with sum / count / avg / min / max                                                                                     |
-| **Load**      | Write to Postgres, MySQL, SQLite, CSV, Excel, Parquet, or a REST API — any combination, in one job                                       |
-
-Every job gets a structured JSON-lines log file and a job ID you can poll for status.
+> Built with **FastAPI + Celery + Redis** · Containerized with Docker
 
 ---
 
-## Quick start
+## What It Does
 
-### With Docker (recommended — no Python needed)
+| Feature             | Details                                                                                                                                  |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| **Extract**         | CSV, Excel (.xls/.xlsx), Parquet, PostgreSQL, MySQL, SQLite, paginated REST APIs                                                         |
+| **Transform**       | Type casting, column rename/drop, row filtering (12 operators), data validation (11 rule types), aggregation (SUM, COUNT, AVG, MIN, MAX) |
+| **Load**            | PostgreSQL, MySQL, SQLite, file output (CSV/Excel/Parquet), REST API endpoints                                                           |
+| **DB Migration**    | Any-to-any: PG→MySQL, MySQL→PG, SQLite→PG, etc. — with full transform pipeline                                                           |
+| **Live Progress**   | WebSocket streaming — clients receive real-time stage updates (0% → 100%)                                                                |
+| **Background Jobs** | Celery workers — jobs survive server restarts, run concurrently                                                                          |
+| **Idempotency**     | SHA-256 request hashing — identical submissions return the existing job, no duplicate work                                               |
+| **Retry + DLQ**     | Exponential backoff (2s → 4s → 8s…), dead-letter queue for permanently failed jobs                                                       |
+| **Job Persistence** | Redis-backed store with 24h TTL — survives restarts unlike in-memory dicts                                                               |
+| **Dashboard**       | Single-file HTML/JS SPA — upload files, inspect schemas, configure DB targets, watch live progress                                       |
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                          Client / Dashboard                         │
+│   Upload File  ─────►  POST /v1/etl/run-async  ──► job_id          │
+│   WS Connect   ─────►  WS /v1/etl/ws/etl/{id}  ◄── live events     │
+└────────────────────────────┬────────────────────────────────────────┘
+                             │ HTTP + WebSocket
+┌────────────────────────────▼────────────────────────────────────────┐
+│                         FastAPI App (:8000)                         │
+│                                                                     │
+│  /v1/files/*          File upload, metadata, column stats           │
+│  /v1/etl/*            ETL jobs (sync + async) + WS endpoint         │
+│  /v1/migrate/*        DB-to-DB migration (sync + async)             │
+│  /v1/databases/*      Connection test, table browse                 │
+│  /v1/utilities/*      Data types, filter operators, enums           │
+│  /static/dashboard    Live progress dashboard (HTML)                │
+└────────────┬───────────────────────────────┬───────────────────────┘
+             │ Publish progress events        │ Enqueue tasks
+             │                               ▼
+┌────────────▼───────────────┐  ┌───────────────────────────────────┐
+│        Redis               │  │       Celery Workers (:pool=4)    │
+│  Broker (DB 0)             │  │                                   │
+│  Result backend (DB 1)     │  │  run_etl_task                     │
+│  Job store  job:<id>       │◄─┤  ├── Extract (file/DB/API)        │
+│  Idempotency job:idem:<h>  │  │  ├── Filter rows                  │
+│  Pub/Sub  etl:<id>  ───────┼──►  ├── Transform schema             │
+│                            │  │  ├── Validate data                │
+└────────────────────────────┘  │  ├── Aggregate                    │
+                                │  └── Load to destination          │
+                                │                                   │
+                                │  etl_dead_letter (DLQ after       │
+                                │  max retries exhausted)           │
+                                └───────────────────────────────────┘
+```
+
+---
+
+## Technical Highlights
+
+### Idempotent Job Submission
+
+Every `POST /run-async` request is fingerprinted with a SHA-256 hash of the entire body. Submitting the same job twice returns the existing `job_id` — no duplicate Celery tasks, no wasted worker time.
+
+```python
+req_hash = compute_request_hash(request_dict)   # SHA-256 of JSON body
+existing = get_idempotent_job_id(req_hash)       # check Redis
+if existing:
+    return cached_result(existing)               # short-circuit
+```
+
+### Live WebSocket Progress via Redis Pub/Sub
+
+The Celery worker publishes progress events to a Redis channel at each pipeline stage. The FastAPI WebSocket endpoint subscribes and forwards events to connected clients in real time — no polling needed.
+
+```
+Celery task  ──publish──►  Redis channel etl:<job_id>  ──subscribe──►  WS endpoint  ──►  browser
+```
+
+### Exponential Backoff + Dead Letter Queue
+
+Tasks automatically retry on transient failures (network timeouts, DB unavailable). After `MAX_RETRIES`, they route to a dedicated DLQ for alerting/inspection — not silently dropped.
+
+```python
+@celery_app.task(
+    autoretry_for=(Exception,),
+    max_retries=3,
+    retry_backoff=True,        # 2s → 4s → 8s
+    retry_jitter=True,         # avoid thundering herd
+    dont_autoretry_for=(ValueError, FileNotFoundError),  # data errors don't retry
+)
+```
+
+### Database Query Optimisation (from production work)
+
+Inspired by real-world work reducing DB queries from **180 → 44** at EWN using `select_related` and `prefetch_related`. TinyTeemo applies the same principle: batch inserts, chunked reads, and strategic connection pooling.
+
+---
+
+## Running Locally
+
+**Prerequisites:** Docker + Docker Compose
 
 ```bash
-# 1. Copy the env template
-cp .env.example .env
-# Edit .env — at minimum change SECRET_KEY
+git clone https://github.com/Zahidul-Turja/tiny-teemo-etl
+cd tiny-teemo-etl
 
-# 2. Start the API
+cp .env.example .env
+
+# Build images (first time: resolves all dependencies)
+docker compose build
+
+# Start Redis + FastAPI + Celery worker + Flower monitor
 docker compose up -d
 
-# 3. Open the docs
+# Open the dashboard
+open http://localhost:8000/static/dashboard.html
+
+# Swagger API docs
 open http://localhost:8000/docs
+
+# Celery task monitor (Flower)
+open http://localhost:5555
 ```
 
-### Without Docker (local dev with uv)
+**Tear down:**
 
 ```bash
-uv sync
-cp .env.example .env
-uv run dev        # auto-reload dev server on :8000
+docker compose down -v
 ```
 
 ---
 
-## Docker usage
-
-TinyTeemo connects to **your existing databases** — it does not own or manage them. The Docker setup only runs the ETL API itself.
-
-```bash
-# Start the API
-docker compose up -d
-
-# For development
-docker compose up dev -d
-
-# View logs
-docker compose logs -f app
-
-# Stop (data in named volumes is preserved)
-docker compose down
-
-# Run the test suite inside Docker
-docker compose run --rm test
-docker compose run --rm test -k test_migration   # filter tests
-docker compose run --rm test --tb=long           # verbose output
-
-# ── Local dev databases (optional) ──────────────────────────────────────────
-# If you don't have a Postgres or MySQL running locally and want just for
-# testing, you can spin up lightweight containers on demand:
-
-docker compose --profile local-db up -d          # start Postgres + MySQL
-docker compose --profile local-db down           # stop them (data kept)
-docker compose --profile local-db down -v        # stop and wipe data
-
-# Connection details for the local-db containers:
-#   Postgres → host: localhost  port: 5432  db/user/pass: see .env
-#   MySQL    → host: localhost  port: 3306  db/user/pass: see .env
-```
-
-### Why no databases in the default compose?
-
-TinyTeemo is a tool, not a database host. Your production Postgres or MySQL lives on your own server or cloud — TinyTeemo just connects to it via credentials you supply in the API request. Starting extra DB containers by default would imply those are the databases you migrate to/from, which is wrong.
-
-The `local-db` profile exists purely as a convenience for local development and testing.
-
-<!-- The `docker-compose-db.yml` exists purely as a convenience for local development and testing. -->
-
----
-
-## Running tests
-
-```bash
-# On the host (fastest)
-uv run test
-
-# Filter to specific tests
-uv run test -k test_migration
-uv run test -k "TestSQLiteConnector or TestRowFilter"
-
-# Inside Docker (same environment as production)
-docker compose run --rm test
-```
-
----
-
-## API overview
-
-All routes live under `/v1`. Interactive docs at `http://localhost:8000/docs`.
+## API Reference
 
 ### Files
 
-| Method   | Path                                     | Description                        |
-| -------- | ---------------------------------------- | ---------------------------------- |
-| `POST`   | `/v1/files/upload`                       | Upload CSV / Excel / Parquet       |
-| `GET`    | `/v1/files/list`                         | List uploaded files                |
-| `GET`    | `/v1/files/info/{file_id}`               | Column metadata + type suggestions |
-| `GET`    | `/v1/files/column-stats/{file_id}/{col}` | Detailed stats for one column      |
-| `DELETE` | `/v1/files/{file_id}`                    | Delete an uploaded file            |
+| Method   | Endpoint                   | Description                                        |
+| -------- | -------------------------- | -------------------------------------------------- |
+| `POST`   | `/v1/files/upload`         | Upload CSV/Excel/Parquet, returns schema + preview |
+| `GET`    | `/v1/files/list`           | List all uploaded files                            |
+| `GET`    | `/v1/files/info/{file_id}` | Metadata + column stats for one file               |
+| `DELETE` | `/v1/files/{file_id}`      | Delete uploaded file                               |
 
 ### ETL Jobs
 
-| Method | Path                            | Description                               |
-| ------ | ------------------------------- | ----------------------------------------- |
-| `POST` | `/v1/etl/run`                   | Run a full ETL job (waits for result)     |
-| `POST` | `/v1/etl/run-async`             | Queue a job, returns `job_id` immediately |
-| `GET`  | `/v1/etl/status/{job_id}`       | Poll job status / get final result        |
-| `GET`  | `/v1/etl/jobs`                  | List all jobs this session                |
-| `GET`  | `/v1/etl/logs/{job_id}`         | Structured log events for a job           |
-| `GET`  | `/v1/etl/invalid-rows/{job_id}` | Download invalid-rows CSV                 |
+| Method | Endpoint                        | Description                                 |
+| ------ | ------------------------------- | ------------------------------------------- |
+| `POST` | `/v1/etl/run`                   | Run ETL synchronously (small datasets)      |
+| `POST` | `/v1/etl/run-async`             | Queue ETL job, returns `job_id` immediately |
+| `GET`  | `/v1/etl/status/{job_id}`       | Poll job status / final result              |
+| `GET`  | `/v1/etl/jobs`                  | List all jobs                               |
+| `WS`   | `/v1/etl/ws/etl/{job_id}`       | Live progress stream                        |
+| `GET`  | `/v1/etl/logs/{job_id}`         | Structured log events                       |
+| `GET`  | `/v1/etl/invalid-rows/{job_id}` | Download invalid-rows CSV                   |
 
 ### DB Migration
 
-| Method | Path                    | Description                                         |
-| ------ | ----------------------- | --------------------------------------------------- |
-| `POST` | `/v1/migrate/preview`   | Inspect source table/query schema — no data fetched |
-| `POST` | `/v1/migrate/tables`    | List all tables in a source database                |
-| `POST` | `/v1/migrate/run`       | Migrate DB→DB (synchronous)                         |
-| `POST` | `/v1/migrate/run-async` | Migrate DB→DB (background, poll for result)         |
+| Method | Endpoint                | Description                             |
+| ------ | ----------------------- | --------------------------------------- |
+| `POST` | `/v1/migrate/tables`    | List tables in a source database        |
+| `POST` | `/v1/migrate/preview`   | Inspect source schema (no data fetched) |
+| `POST` | `/v1/migrate/run`       | Synchronous DB-to-DB migration          |
+| `POST` | `/v1/migrate/run-async` | Background DB-to-DB migration           |
 
 ### Databases
 
-| Method | Path                                | Description                         |
-| ------ | ----------------------------------- | ----------------------------------- |
-| `POST` | `/v1/databases/test-connection`     | Test a database connection          |
-| `GET`  | `/v1/databases/supported-types`     | List supported DB engines           |
-| `POST` | `/v1/databases/upload`              | Upload a file directly into a table |
-| `POST` | `/v1/databases/summary`             | Full DB summary with table previews |
-| `POST` | `/v1/databases/table-exists/{name}` | Check if a table exists             |
-
-### Utilities
-
-| Method | Path                             | Description                              |
-| ------ | -------------------------------- | ---------------------------------------- |
-| `GET`  | `/v1/utilities/data-types`       | Supported types with format requirements |
-| `GET`  | `/v1/utilities/date-formats`     | Date format strings with examples        |
-| `GET`  | `/v1/utilities/datetime-formats` | Datetime format strings with examples    |
+| Method | Endpoint                        | Description                            |
+| ------ | ------------------------------- | -------------------------------------- |
+| `POST` | `/v1/databases/test-connection` | Test DB connectivity                   |
+| `POST` | `/v1/databases/summary`         | Full schema browse with table previews |
+| `GET`  | `/v1/databases/supported-types` | List supported DB engines              |
 
 ---
 
-## Examples
+## Example: File → Database
 
-### Migrate a table between databases
+```bash
+# 1. Upload a file
+curl -X POST http://localhost:8000/v1/files/upload \
+  -F "file=@sales_data.csv"
+# → {"data": {"file_id": "sales_data_abc123.csv", "row_count": 50000, ...}}
 
-```jsonc
-// POST /v1/migrate/run
-{
-  "source": {
-    "connection": {
-      "db_type": "postgresql",
-      "host": "old-server.example.com",
-      "database": "legacy_db",
-      "username": "reader",
-      "password": "...",
-    },
-    "table_name": "orders",
-    // or use "query": "SELECT * FROM orders WHERE created_at > '2024-01-01'"
-  },
-  "db_destination": {
-    "connection": {
-      "db_type": "mysql",
-      "host": "new-server.example.com",
-      "database": "new_db",
-      "username": "writer",
-      "password": "...",
-    },
-    "table_name": "orders",
-    "if_exists": "replace",
-  },
-}
+# 2. Queue async ETL job
+curl -X POST http://localhost:8000/v1/etl/run-async \
+  -H "Content-Type: application/json" \
+  -d '{
+    "file_id": "sales_data_abc123.csv",
+    "column_mappings": [
+      {"column_name": "id",     "source_dtype": "int64",  "target_dtype": "integer", "is_primary_key": true},
+      {"column_name": "amount", "source_dtype": "float64","target_dtype": "decimal"},
+      {"column_name": "date",   "source_dtype": "object", "target_dtype": "date"}
+    ],
+    "db_destination": {
+      "connection": {"db_type": "postgresql", "host": "localhost", "database": "mydb", "username": "user", "password": "pass"},
+      "table_name": "sales",
+      "if_exists": "replace"
+    }
+  }'
+# → {"job_id": "d4f2a...", "ws_url": "/v1/etl/ws/etl/d4f2a..."}
+
+# 3. Connect WebSocket for live updates
+wscat -c ws://localhost:8000/v1/etl/ws/etl/d4f2a...
+# {"stage":"extract","progress":20,"message":"Extracted 50000 rows"}
+# {"stage":"transform","progress":55,"message":"Schema mapping complete"}
+# {"stage":"load","progress":90,"message":"Writing to DB table 'sales'"}
+# {"stage":"done","progress":100,"result":{...}}
 ```
 
-Column types are inferred automatically. Supply `column_mappings` only when you want to cast, rename, or transform specific columns.
+## Example: Database Migration
 
-### Load a CSV into Postgres with validation
-
-```jsonc
-// POST /v1/etl/run
-{
-  "file_id": "20240101_abc12345_sales.csv", // from POST /v1/files/upload
-
-  "column_mappings": [
-    {
-      "column_name": "order_id",
-      "source_dtype": "int64",
-      "target_dtype": "integer",
-      "is_primary_key": true,
+```bash
+curl -X POST http://localhost:8000/v1/migrate/run-async \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source": {
+      "connection": {"db_type": "postgresql", "host": "old-server", "database": "legacy", "username": "reader", "password": "..."},
+      "table_name": "customers"
     },
-    {
-      "column_name": "amount",
-      "source_dtype": "object",
-      "target_dtype": "decimal",
-    }, // strips $,
-    {
-      "column_name": "status",
-      "source_dtype": "object",
-      "target_dtype": "string",
-      "rename_to": "order_status",
+    "db_destination": {
+      "connection": {"db_type": "mysql", "host": "new-server", "database": "modern", "username": "writer", "password": "..."},
+      "table_name": "customers_migrated",
+      "if_exists": "replace"
     },
-    {
-      "column_name": "created_at",
-      "source_dtype": "object",
-      "target_dtype": "date",
-      "date_format": "DD/MM/YYYY",
-    },
-  ],
-
-  "filters": [{ "column": "amount", "operator": "gt", "value": 0 }],
-
-  "validation_rules": [
-    { "column": "order_id", "rule_type": "not_null" },
-    { "column": "order_id", "rule_type": "unique" },
-    { "column": "amount", "rule_type": "min_value", "params": { "min": 0.01 } },
-  ],
-
-  "db_destination": {
-    "connection": {
-      "db_type": "postgresql",
-      "host": "localhost",
-      "database": "mydb",
-      "username": "user",
-      "password": "secret",
-    },
-    "table_name": "orders",
-    "if_exists": "replace",
-  },
-
-  "batch_size": 10000,
-  "max_retries": 3,
-}
-```
-
-### Check source schema before migrating
-
-```jsonc
-// POST /v1/migrate/preview
-{
-  "connection": {
-    "db_type": "postgresql",
-    "host": "old-server.example.com",
-    "database": "legacy_db",
-    "username": "reader",
-    "password": "..."
-  },
-  "table_name": "orders"
-}
-
-// Response
-{
-  "success": true,
-  "column_count": 8,
-  "columns": [
-    { "column_name": "order_id",   "source_dtype": "int64",   "suggested_target_dtype": "bigint" },
-    { "column_name": "customer",   "source_dtype": "object",  "suggested_target_dtype": "text" },
-    { "column_name": "amount",     "source_dtype": "float64", "suggested_target_dtype": "float" },
-    ...
-  ]
-}
+    "batch_size": 5000
+  }'
 ```
 
 ---
 
-## Configuration (`.env`)
-
-| Variable                 | Default          | Description                                        |
-| ------------------------ | ---------------- | -------------------------------------------------- |
-| `SECRET_KEY`             | _(required)_     | App secret — change in production                  |
-| `APP_PORT`               | `8000`           | Host port to expose the API on                     |
-| `UPLOAD_DIR`             | `uploaded_files` | Where uploaded files are stored                    |
-| `LOG_DIR`                | `logs`           | Where per-job `.jsonl` log files go                |
-| `INVALID_ROWS_DIR`       | `invalid_rows`   | Where invalid-row CSVs are saved                   |
-| `DEFAULT_BATCH_SIZE`     | `10000`          | Default rows per DB insert batch                   |
-| `MAX_RETRIES`            | `3`              | Default retry attempts on DB upload failure        |
-| `RETRY_DELAY_SECONDS`    | `2.0`            | Base delay between retries (multiplied by attempt) |
-| `POSTGRES_*` / `MYSQL_*` | —                | Only needed if using the `local-db` Docker profile |
-
----
-
-## Project layout
+## Project Structure
 
 ```
-tinyteemo/
-├── main.py                          # FastAPI app + lifespan
-├── Dockerfile                       # 3-stage: builder / runtime / test
-├── docker-compose.yml               # app (default) + test + local-db (opt-in)
-├── pyproject.toml                   # deps + uv run scripts
-├── .env.example
-│
+tiny-teemo-etl/
 ├── app/
 │   ├── api/v1/endpoints/
-│   │   ├── files.py                 # file upload/management
-│   │   ├── database.py              # DB connection + simple upload
-│   │   ├── etl.py                   # ETL job run/status/logs
-│   │   ├── migrate.py               # DB-to-DB migration
-│   │   └── utilities.py             # data types, date formats
-│   │
-│   ├── core/
-│   │   ├── config.py                # settings (pydantic-settings)
-│   │   └── constants.py             # enums, limits
-│   │
+│   │   ├── etl.py          # ETL jobs + WebSocket endpoint
+│   │   ├── migrate.py      # DB-to-DB migration
+│   │   ├── files.py        # File upload/metadata
+│   │   ├── database.py     # Connection test + browse
+│   │   └── utilities.py    # Enums/types reference
+│   ├── worker/
+│   │   ├── celery_app.py   # Celery config + queue definitions
+│   │   ├── tasks.py        # ETL task with retry + DLQ
+│   │   └── job_store.py    # Redis job CRUD + idempotency + pub/sub
+│   ├── services/
+│   │   ├── file_processor.py   # CSV/Excel/Parquet reader
+│   │   ├── schema_mapper.py    # Type casting, filtering, validation
+│   │   ├── db_reader.py        # Database source reader
+│   │   ├── api_writer.py       # REST API destination writer
+│   │   ├── file_writer.py      # File output writer
+│   │   └── etl_logger.py       # Structured per-job logger
 │   ├── database/connectors/
-│   │   ├── base.py                  # abstract base + read_dataframe + upload_dataframe
-│   │   ├── sqlite.py
-│   │   ├── postgres.py
-│   │   └── mysql.py
-│   │
-│   ├── models/schemas.py            # all Pydantic models
-│   │
-│   └── services/
-│       ├── db_reader.py             # extract from source DB → DataFrame
-│       ├── file_processor.py        # read CSV/Excel/Parquet
-│       ├── schema_mapper.py         # transform, filter, validate, aggregate
-│       ├── etl_runner.py            # full pipeline + job store
-│       ├── etl_logger.py            # structured per-job logging
-│       ├── file_writer.py           # write DataFrame → file
-│       └── api_writer.py            # write DataFrame → REST API
-│
-└── tests/                           # 127 tests, 0 warnings
-    ├── conftest.py
-    ├── test_file_processor.py
-    ├── test_transformations.py
-    ├── test_connectors.py
-    ├── test_etl.py
-    └── test_migration.py
+│   │   ├── base.py         # Abstract connector (upload_dataframe, create_index…)
+│   │   ├── postgres.py     # psycopg2-based
+│   │   ├── mysql.py        # PyMySQL-based (pure Python, cross-platform)
+│   │   └── sqlite.py       # sqlite3-based
+│   ├── models/schemas.py   # All Pydantic v2 request/response models
+│   └── core/
+│       ├── config.py       # Settings (pydantic-settings, .env)
+│       └── constants.py    # Enums, type maps, limits
+├── static/
+│   └── dashboard.html      # Live dashboard SPA (zero dependencies)
+├── tests/                  # pytest test suite
+├── docker-compose.yml      # app + worker + redis + flower
+├── Dockerfile              # Multi-stage: builder → runtime → test
+├── pyproject.toml          # Dependencies (uv)
+└── .env.example
 ```
 
 ---
 
-## Extending
+## Tech Stack
 
-**New file format** — add a branch in `FileProcessor._read_file()` and register the extension in `ALLOWED_EXTENSIONS`.
+| Layer            | Technology                                 |
+| ---------------- | ------------------------------------------ |
+| API Framework    | FastAPI 0.115 + Uvicorn (ASGI)             |
+| Task Queue       | Celery 5.3 with Redis broker               |
+| Real-time        | WebSocket (native FastAPI) + Redis Pub/Sub |
+| Data Processing  | Pandas 2.0 + PyArrow                       |
+| Databases        | psycopg2 (PostgreSQL) · PyMySQL · sqlite3  |
+| Validation       | Pydantic v2                                |
+| Containerisation | Docker + Docker Compose                    |
+| Monitoring       | Flower (Celery task dashboard)             |
+| Package Manager  | uv                                         |
 
-**New database** — subclass `BaseDatabaseConnector`, implement the abstract methods, add to the `DatabaseType` enum and the `_get_connector()` factory in `etl_runner.py`.
+---
 
-**New validation rule** — add a value to `ValidationRuleType` and a branch in `DataValidator.validate()` in `schema_mapper.py`.
+## Environment Variables
 
-**Persistent job store** — replace the in-memory `JOB_STORE` dict in `etl_runner.py` with a Redis client or a SQLAlchemy model. The interface (`get_job_status`, `list_jobs`) stays the same.
+```env
+SECRET_KEY=your-secret-here
+REDIS_URL=redis://localhost:6379/0
+CELERY_BROKER_URL=redis://localhost:6379/0
+CELERY_RESULT_BACKEND=redis://redis:6379/1
+UPLOAD_DIR=uploaded_files
+LOG_DIR=logs
+INVALID_ROWS_DIR=invalid_rows
+MAX_RETRIES=3
+DEFAULT_BATCH_SIZE=10000
+```
+
+---
+
+_Built by [Zahidul Islam Turja](https://zahidul-turja.vercel.app) · [LinkedIn](https://linkedin.com/in/zahidul-turja) · [GitHub](https://github.com/Zahidul-Turja)_

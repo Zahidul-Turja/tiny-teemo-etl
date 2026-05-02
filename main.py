@@ -10,6 +10,7 @@ from fastapi.exception_handlers import (
 )
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -59,7 +60,12 @@ app.add_middleware(
 )
 
 
-# ── startup: ensure required directories exist ────────────────────────────────
+# ── static files ─────────────────────────────────────────────────────────────
+import os as _os
+
+if _os.path.isdir("static"):
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+
 # ── routes ────────────────────────────────────────────────────────────────────
 app.include_router(router.router, prefix="/v1")
 

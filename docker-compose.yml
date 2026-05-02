@@ -1,9 +1,22 @@
 services:
-  # ── TinyTeemo ETL API ─────────────────────────────────────────────────────
-  # This is the only service that runs by default.
-  # TinyTeemo connects to YOUR existing databases — it does not own them.
-  # Supply your DB credentials via .env or environment variables when calling
-  # the API. No database containers are started unless you opt in (see below).
+  # ── Redis (broker + result backend + pub/sub) ─────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: tinyteemo-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - teemo-net
+
+  # ── FastAPI app ────────────────────────────────────────────────────────────
   app:
     build:
       context: .
@@ -19,10 +32,16 @@ services:
       UPLOAD_DIR: /data/uploads
       LOG_DIR: /data/logs
       INVALID_ROWS_DIR: /data/invalid_rows
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      REDIS_URL: redis://redis:6379/0
     volumes:
       - uploads:/data/uploads
       - logs:/data/logs
       - invalid_rows:/data/invalid_rows
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -32,12 +51,66 @@ services:
     networks:
       - teemo-net
 
-  # For development
+  # ── Celery worker ──────────────────────────────────────────────────────────
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: tinyteemo-worker
+    restart: unless-stopped
+    command: >
+      celery -A app.worker.celery_app worker
+      --loglevel=info
+      --queues=etl.default,etl.dlq
+      --concurrency=4
+    env_file:
+      - .env
+    environment:
+      UPLOAD_DIR: /data/uploads
+      LOG_DIR: /data/logs
+      INVALID_ROWS_DIR: /data/invalid_rows
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - uploads:/data/uploads
+      - logs:/data/logs
+      - invalid_rows:/data/invalid_rows
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - teemo-net
+
+  # ── Celery Flower (monitoring dashboard) ──────────────────────────────────
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: tinyteemo-flower
+    restart: unless-stopped
+    command: >
+      celery -A app.worker.celery_app flower
+      --port=5555
+      --broker=redis://redis:6379/0
+    ports:
+      - "${FLOWER_PORT:-5555}:5555"
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+    networks:
+      - teemo-net
+
+  # ── Dev service ────────────────────────────────────────────────────────────
   dev:
     build:
       context: .
       dockerfile: Dockerfile
-      target: builder # reuse the stage that already has all deps installed
+      target: builder
     container_name: tinyteemo-dev
     restart: unless-stopped
     ports:
@@ -49,10 +122,16 @@ services:
       LOG_DIR: /tmp/teemo/logs
       INVALID_ROWS_DIR: /tmp/teemo/invalid_rows
       SECRET_KEY: dev-secret-key
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      REDIS_URL: redis://redis:6379/0
       PATH: /app/.venv/bin:/usr/local/bin:/usr/bin:/bin
     volumes:
       - ./app:/app/app
       - ./main.py:/app/main.py
+    depends_on:
+      redis:
+        condition: service_healthy
     networks:
       - teemo-net
     command: >
@@ -60,19 +139,9 @@ services:
       --host 0.0.0.0
       --port 8000
       --reload
+    profiles: [dev]
 
-  # ── Test runner ───────────────────────────────────────────────────────────
-  # Runs the pytest suite inside Docker against your CURRENT source files.
-  #
-  # Source code is bind-mounted from the host — so you NEVER need to rebuild
-  # the image after changing code. Only rebuild when dependencies change
-  # (i.e. pyproject.toml / uv.lock changes).
-  #
-  # Usage:
-  #   docker compose run --rm test                    # run all tests
-  #   docker compose run --rm test -k test_migration  # filter by name
-  #   docker compose run --rm test --tb=long          # verbose tracebacks
-  #   docker compose build test                       # rebuild (deps changed)
+  # ── Test runner ────────────────────────────────────────────────────────────
   test:
     build:
       context: .
@@ -85,33 +154,21 @@ services:
       UPLOAD_DIR: /tmp/teemo/uploads
       LOG_DIR: /tmp/teemo/logs
       INVALID_ROWS_DIR: /tmp/teemo/invalid_rows
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      REDIS_URL: redis://redis:6379/0
     volumes:
-      # Bind-mount source code so the container always uses your latest files.
-      # The .venv stays inside the image — only code is mounted from the host.
       - ./app:/app/app:ro
       - ./tests:/app/tests:ro
       - ./main.py:/app/main.py:ro
+    depends_on:
+      redis:
+        condition: service_healthy
     networks:
       - teemo-net
     entrypoint: ["python", "-m", "pytest", "tests/", "-v", "--tb=short"]
 
-  # ─────────────────────────────────────────────────────────────────────────
-  # LOCAL DEV DATABASES  (profile: local-db)
-  # ─────────────────────────────────────────────────────────────────────────
-  # Only start these if you need a local DB to test against and don't have
-  # your own running. They are NOT required to run TinyTeemo itself.
-  #
-  # Usage:
-  #   docker compose --profile local-db up -d      # start local DBs only
-  #   docker compose --profile local-db down        # stop and keep data
-  #   docker compose --profile local-db down -v     # stop and wipe data
-  #
-  # Connect TinyTeemo to them using:
-  #   host: localhost (from host) or postgres / mysql (from inside Docker)
-  #   port: 5432 / 3306
-  #   database/user/password: see .env or the defaults below
-  # ─────────────────────────────────────────────────────────────────────────
-
+  # ── Local dev databases (profile: local-db) ────────────────────────────────
   postgres:
     image: postgres:16-alpine
     container_name: tinyteemo-postgres-local
@@ -130,12 +187,14 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s
     networks:
       - teemo-net
 
   mysql:
     image: mysql:8.4
+    # NOTE: The Docker service name IS the hostname inside the teemo-net network.
+    # When connecting from the app/worker containers, use host: "mysql"
+    # (not the container_name). The container_name is only for `docker` CLI use.
     container_name: tinyteemo-mysql-local
     profiles: [local-db]
     restart: unless-stopped
@@ -168,6 +227,7 @@ services:
       - teemo-net
 
 volumes:
+  redis_data:
   uploads:
   logs:
   invalid_rows:
