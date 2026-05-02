@@ -177,6 +177,23 @@ class SQLiteConnector(BaseDatabaseConnector):
 
     # ── internal ──────────────────────────────────────────────────────────────
 
+    # ── read support ─────────────────────────────────────────────────────────
+
+    def _quote_columns(self, columns):
+        return ", ".join(f'"{c}"' for c in columns)
+
+    def _select_sql(self, table_name, col_str):
+        return f'SELECT {col_str} FROM "{table_name}"'
+
+    def _execute_to_df(self, sql: str):
+        import pandas as pd
+
+        self.connect()
+        try:
+            return pd.read_sql_query(sql, self._conn)
+        finally:
+            self.disconnect()
+
     def _map_datatype_to_sql(self, dtype: DataType) -> str:
         return {
             DataType.INTEGER: "INTEGER",

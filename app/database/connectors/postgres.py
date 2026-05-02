@@ -49,15 +49,13 @@ class PostgresConnector(BaseDatabaseConnector):
             self.connect()
             cursor = self._conn.cursor(cursor_factory=RealDictCursor)
 
-            cursor.execute(
-                """
+            cursor.execute("""
                 SELECT table_name
                 FROM information_schema.tables
                 WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
                   AND table_type = 'BASE TABLE'
                 ORDER BY table_name;
-                """
-            )
+                """)
             list_of_tables = [row["table_name"] for row in cursor.fetchall()]
 
             previews = []
@@ -171,10 +169,7 @@ class PostgresConnector(BaseDatabaseConnector):
         try:
             for i in range(0, len(df), batch_size):
                 batch_df = df.iloc[i : i + batch_size]
-                rows = [
-                    tuple(None if pd.isna(v) else v for v in row)
-                    for row in batch_df.itertuples(index=False)
-                ]
+                rows = [tuple(row) for row in batch_df.itertuples(index=False)]
                 execute_values(cursor, query, rows)
                 rows_inserted += len(rows)
 
@@ -200,6 +195,23 @@ class PostgresConnector(BaseDatabaseConnector):
             f'CREATE INDEX IF NOT EXISTS "{index_name}" ON "{table_name}" ({col_str})'
         )
         self._conn.commit()
+
+    # ── read support ─────────────────────────────────────────────────────────
+
+    def _quote_columns(self, columns):
+        return ", ".join(f'"{c}"' for c in columns)
+
+    def _select_sql(self, table_name, col_str):
+        return f'SELECT {col_str} FROM "{table_name}"'
+
+    def _execute_to_df(self, sql: str):
+        import pandas as pd
+
+        self.connect()
+        try:
+            return pd.read_sql_query(sql, self._conn)
+        finally:
+            self.disconnect()
 
     # ── internal ─────────────────────────────────────────────────────────────
 

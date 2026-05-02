@@ -1,6 +1,8 @@
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
+import pymysql
+import pymysql.cursors
 
 from app.core.constants import DataType
 from app.database.connectors.base import BaseDatabaseConnector
@@ -11,31 +13,30 @@ class MySQLConnector(BaseDatabaseConnector):
 
     def connect(self) -> None:
         try:
-            import mysql.connector
-
             c = self.connection
-            self._conn = mysql.connector.connect(
+            self._conn = pymysql.connect(
                 host=c.host,
                 port=c.port or 3306,
                 database=c.database,
                 user=c.username,
                 password=c.password,
                 autocommit=False,
+                charset="utf8mb4",
             )
         except Exception as exc:
             raise ConnectionError(f"Failed to connect to MySQL: {exc}") from exc
 
     def disconnect(self) -> None:
-        if self._conn and self._conn.is_connected():
+        if self._conn and self._conn.open:
             self._conn.close()
             self._conn = None
 
     def test_connection(self) -> Dict[str, Any]:
         try:
             self.connect()
-            cursor = self._conn.cursor()
-            cursor.execute("SELECT VERSION()")
-            version = cursor.fetchone()[0]
+            with self._conn.cursor() as cursor:
+                cursor.execute("SELECT VERSION()")
+                version = cursor.fetchone()[0]
             return {
                 "success": True,
                 "message": "Connection successful",
@@ -49,41 +50,41 @@ class MySQLConnector(BaseDatabaseConnector):
     def summarize(self, preview_rows: int = 5) -> Dict[str, Any]:
         try:
             self.connect()
-            cursor = self._conn.cursor(dictionary=True)
+            # DictCursor returns rows as dicts (replaces cursor(dictionary=True))
+            with self._conn.cursor(pymysql.cursors.DictCursor) as cursor:
+                cursor.execute("SHOW TABLES")
+                list_of_tables = [list(row.values())[0] for row in cursor.fetchall()]
 
-            cursor.execute("SHOW TABLES")
-            list_of_tables = [list(row.values())[0] for row in cursor.fetchall()]
+                previews = []
+                for table_name in list_of_tables:
+                    cursor.execute(
+                        f"SELECT * FROM `{table_name}` LIMIT %s", (preview_rows,)
+                    )
+                    table_data = cursor.fetchall()
 
-            previews = []
-            for table_name in list_of_tables:
-                cursor.execute(
-                    f"SELECT * FROM `{table_name}` LIMIT %s", (preview_rows,)
-                )
-                table_data = cursor.fetchall()
+                    cursor.execute(f"DESCRIBE `{table_name}`")
+                    columns = [
+                        {
+                            "name": row["Field"],
+                            "type": row["Type"],
+                            "not_null": row["Null"] == "NO",
+                            "default": row["Default"],
+                            "primary_key": row["Key"] == "PRI",
+                        }
+                        for row in cursor.fetchall()
+                    ]
 
-                cursor.execute(f"DESCRIBE `{table_name}`")
-                columns = [
-                    {
-                        "name": row["Field"],
-                        "type": row["Type"],
-                        "not_null": row["Null"] == "NO",
-                        "default": row["Default"],
-                        "primary_key": row["Key"] == "PRI",
-                    }
-                    for row in cursor.fetchall()
-                ]
+                    cursor.execute(f"SELECT COUNT(*) AS cnt FROM `{table_name}`")
+                    num_rows = cursor.fetchone()["cnt"]
 
-                cursor.execute(f"SELECT COUNT(*) AS cnt FROM `{table_name}`")
-                num_rows = cursor.fetchone()["cnt"]
-
-                previews.append(
-                    {
-                        "table": table_name,
-                        "row_count": num_rows,
-                        "columns": columns,
-                        "data": table_data,
-                    }
-                )
+                    previews.append(
+                        {
+                            "table": table_name,
+                            "row_count": num_rows,
+                            "columns": columns,
+                            "data": table_data,
+                        }
+                    )
 
             return {
                 "database": self.connection.database,
@@ -96,25 +97,25 @@ class MySQLConnector(BaseDatabaseConnector):
             self.disconnect()
 
     def table_exists(self, table_name: str) -> bool:
-        cursor = self._conn.cursor()
-        cursor.execute(
-            "SELECT COUNT(*) FROM information_schema.tables "
-            "WHERE table_schema = DATABASE() AND table_name = %s",
-            (table_name,),
-        )
-        return cursor.fetchone()[0] > 0
+        with self._conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT COUNT(*) FROM information_schema.tables "
+                "WHERE table_schema = DATABASE() AND table_name = %s",
+                (table_name,),
+            )
+            return cursor.fetchone()[0] > 0
 
     def create_table(
         self, table_name: str, column_mappings: List[ColumnMapping]
     ) -> None:
         query = self._build_create_table_query(table_name, column_mappings)
-        cursor = self._conn.cursor()
-        cursor.execute(query)
+        with self._conn.cursor() as cursor:
+            cursor.execute(query)
         self._conn.commit()
 
     def drop_table(self, table_name: str) -> None:
-        cursor = self._conn.cursor()
-        cursor.execute(f"DROP TABLE IF EXISTS `{table_name}`")
+        with self._conn.cursor() as cursor:
+            cursor.execute(f"DROP TABLE IF EXISTS `{table_name}`")
         self._conn.commit()
 
     def insert_data(
@@ -130,18 +131,14 @@ class MySQLConnector(BaseDatabaseConnector):
 
         rows_inserted = 0
         rows_failed = 0
-        cursor = self._conn.cursor()
 
         try:
-            for i in range(0, len(df), batch_size):
-                batch_df = df.iloc[i : i + batch_size]
-                rows = [
-                    tuple(None if pd.isna(v) else v for v in row)
-                    for row in batch_df.itertuples(index=False)
-                ]
-                cursor.executemany(query, rows)
-                rows_inserted += len(rows)
-
+            with self._conn.cursor() as cursor:
+                for i in range(0, len(df), batch_size):
+                    batch_df = df.iloc[i : i + batch_size]
+                    rows = [tuple(row) for row in batch_df.itertuples(index=False)]
+                    cursor.executemany(query, rows)
+                    rows_inserted += len(rows)
             self._conn.commit()
         except Exception as exc:
             self._conn.rollback()
@@ -159,9 +156,26 @@ class MySQLConnector(BaseDatabaseConnector):
         if not index_name:
             index_name = f"idx_{table_name}_{'_'.join(columns)}"
         col_str = ", ".join(f"`{c}`" for c in columns)
-        cursor = self._conn.cursor()
-        cursor.execute(f"CREATE INDEX `{index_name}` ON `{table_name}` ({col_str})")
+        with self._conn.cursor() as cursor:
+            cursor.execute(f"CREATE INDEX `{index_name}` ON `{table_name}` ({col_str})")
         self._conn.commit()
+
+    # ── read support ─────────────────────────────────────────────────────────
+
+    def _quote_columns(self, columns):
+        return ", ".join(f"`{c}`" for c in columns)
+
+    def _select_sql(self, table_name, col_str):
+        return f"SELECT {col_str} FROM `{table_name}`"
+
+    def _execute_to_df(self, sql: str):
+        import pandas as pd
+
+        self.connect()
+        try:
+            return pd.read_sql_query(sql, self._conn)
+        finally:
+            self.disconnect()
 
     def _map_datatype_to_sql(self, dtype: DataType) -> str:
         return {
