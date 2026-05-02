@@ -1,5 +1,3 @@
-"""Integration tests for the ETL pipeline and API endpoints."""
-
 import os
 
 import pandas as pd

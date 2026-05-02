@@ -63,3 +63,22 @@ def test():
             ]
         )
     )
+
+
+def worker():
+    """Start the Celery worker (dev convenience)."""
+    import subprocess, sys
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "celery",
+            "-A",
+            "app.worker.celery_app",
+            "worker",
+            "--loglevel=info",
+            "--queues=etl.default,etl.dlq",
+            "--concurrency=2",
+        ]
+    )

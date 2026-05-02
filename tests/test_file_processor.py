@@ -1,5 +1,3 @@
-"""Tests for FileProcessor."""
-
 import os
 
 import pandas as pd

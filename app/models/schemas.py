@@ -134,17 +134,21 @@ class DatabaseConnection(BaseModel):
     username: Optional[str] = None
     password: Optional[str] = None
 
-    @field_validator("port", mode="before")
-    @classmethod
-    def set_default_port(cls, val, info):
-        if val is None:
-            db_type = info.data.get("db_type")
+    @model_validator(mode="after")
+    def set_default_port(self):
+        """
+        Fill in port defaults AFTER all fields are parsed so db_type is
+        guaranteed to be present. A field_validator(mode='before') is
+        unreliable here because Pydantic v2 may not have validated db_type
+        yet when the port validator runs.
+        """
+        if self.port is None:
             default_ports = {
                 DatabaseType.POSTGRESQL: 5432,
                 DatabaseType.MYSQL: 3306,
             }
-            return default_ports.get(db_type)
-        return val
+            self.port = default_ports.get(self.db_type)
+        return self
 
 
 class TestConnectionRequest(BaseModel):

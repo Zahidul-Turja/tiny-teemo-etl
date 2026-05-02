@@ -1,5 +1,3 @@
-"""Tests for transformation services."""
-
 import pandas as pd
 import pytest
 
@@ -21,7 +19,6 @@ from app.services.schema_mapper import (
     RowFilter,
     SchemaMapper,
 )
-
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 

@@ -27,7 +27,6 @@ from app.services.db_reader import (
 )
 from app.services.etl_runner import run_etl_job
 
-
 # ── fixtures ──────────────────────────────────────────────────────────────────
 
 
@@ -36,8 +35,7 @@ def source_db(tmp_path):
     """Create a populated SQLite source database and return its path."""
     db_path = str(tmp_path / "source.db")
     conn = sqlite3.connect(db_path)
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE orders (
             order_id   INTEGER PRIMARY KEY,
             customer   TEXT,
@@ -45,8 +43,7 @@ def source_db(tmp_path):
             status     TEXT,
             created_at TEXT
         )
-    """
-    )
+    """)
     conn.executemany(
         "INSERT INTO orders VALUES (?, ?, ?, ?, ?)",
         [
