@@ -28,8 +28,8 @@
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                          Client / Dashboard                         │
-│   Upload File  ─────►  POST /v1/etl/run-async  ──► job_id          │
-│   WS Connect   ─────►  WS /v1/etl/ws/etl/{id}  ◄── live events     │
+│   Upload File  ─────►  POST /v1/etl/run-async  ──► job_id           │
+│   WS Connect   ─────►  WS /v1/etl/ws/etl/{id}  ◄── live events      │
 └────────────────────────────┬────────────────────────────────────────┘
                              │ HTTP + WebSocket
 ┌────────────────────────────▼────────────────────────────────────────┐
@@ -41,10 +41,10 @@
 │  /v1/databases/*      Connection test, table browse                 │
 │  /v1/utilities/*      Data types, filter operators, enums           │
 │  /static/dashboard    Live progress dashboard (HTML)                │
-└────────────┬───────────────────────────────┬───────────────────────┘
+└────────────┬────────────────────────────────┬───────────────────────┘
              │ Publish progress events        │ Enqueue tasks
-             │                               ▼
-┌────────────▼───────────────┐  ┌───────────────────────────────────┐
+             │                                │
+┌────────────▼───────────────┐  ┌─────────────▼─────────────────────┐
 │        Redis               │  │       Celery Workers (:pool=4)    │
 │  Broker (DB 0)             │  │                                   │
 │  Result backend (DB 1)     │  │  run_etl_task                     │
