@@ -97,10 +97,6 @@ Tasks automatically retry on transient failures (network timeouts, DB unavailabl
 )
 ```
 
-### Database Query Optimisation (from production work)
-
-Inspired by real-world work reducing DB queries from **180 → 44** at EWN using `select_related` and `prefetch_related`. TinyTeemo applies the same principle: batch inserts, chunked reads, and strategic connection pooling.
-
 ---
 
 ## Running Locally
@@ -289,6 +285,7 @@ tiny-teemo-etl/
 | Containerisation | Docker + Docker Compose                    |
 | Monitoring       | Flower (Celery task dashboard)             |
 | Package Manager  | uv                                         |
+| Dashboard        | HTML + JavaScript                          |
 
 ---
 
